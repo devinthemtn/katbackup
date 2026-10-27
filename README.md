@@ -18,7 +18,9 @@ go install ./cmd/katbackup
 export PATH="$HOME/go/bin:$PATH"
 ```
 
-Then check it works with `katbackup --help`.
+Then check it works with `katbackup --version` (or `katbackup --help`, which shows the version at the top).
+
+The version comes from the git tag you build from, such as `v0.2.0`. Untagged builds report the default set in `internal/cli/root.go`.
 
 If you'd rather not install it, `go build -o katbackup ./cmd/katbackup` builds it in the project folder, and you run it as `./katbackup`.
 
@@ -51,7 +53,7 @@ katbackup restore '.config/**/*.toml' -y       # globs work; -y skips the confir
 katbackup restore -s 2026-10-26 --to /tmp/out  # pick a snapshot, restore somewhere else
 katbackup restore --force                      # overwrite without keeping .katbak copies
 katbackup tui                                  # browse snapshots, tick files, restore
-katbackup prune [-k 5]                         # delete old snapshots (default: keep from config)
+katbackup prune [-k 5 | -k all]               # delete old snapshots (default: keep from config)
 ```
 
 ### Choosing a snapshot
@@ -70,7 +72,7 @@ Paths are relative to your home folder. `~/.zshrc`, `.zshrc` and `/home/you/.zsh
 The config file is `~/.config/katbackup/config.toml`, or `$XDG_CONFIG_HOME/katbackup/config.toml` if that variable is set. `init` writes it for you.
 
 ```toml
-keep = 10          # snapshots to keep; older ones are deleted after each backup (0 = keep all)
+keep = 10          # snapshots to keep; older ones are deleted after each backup ("all" = never delete)
 encrypt = false    # true = always encrypt (prompts for a passphrase on every backup)
 include = ["~/.zshrc", "~/.gitconfig", "~/.config/nvim", "~/.config/zellij"]
 exclude = ["**/node_modules", "**/.git", "**/*.log", "**/cache"]
@@ -79,7 +81,7 @@ secrets = ["~/.ssh", "~/.config/gh/hosts.yml"]
 
 | Key | Meaning |
 |---|---|
-| `keep` | How many snapshots to keep. `0` keeps them all. |
+| `keep` | How many snapshots to keep: a number, or `"all"` to never delete any. Defaults to `10`. (`0` also means all.) |
 | `encrypt` | Encrypt every backup, as if you always passed `-e`. |
 | `include` | Files and folders to back up. Folders are copied with everything inside them. |
 | `exclude` | Globs to skip inside included folders. |

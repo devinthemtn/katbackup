@@ -95,7 +95,7 @@ func Run(opts Options) (Result, error) {
 		}
 		res.Staging = ""
 	}
-	res.Pruned, err = snapshot.Prune(dir, cfg.Keep)
+	res.Pruned, err = snapshot.Prune(dir, int(cfg.Keep))
 	return res, err
 }
 

@@ -374,7 +374,7 @@ func restoreCmd() *cobra.Command {
 }
 
 func pruneCmd() *cobra.Command {
-	var keep int
+	var keep config.Keep
 	cmd := &cobra.Command{
 		Use:   "prune",
 		Short: "Delete old snapshots",
@@ -390,7 +390,7 @@ func pruneCmd() *cobra.Command {
 				}
 				keep = cfg.Keep
 			}
-			removed, err := snapshot.Prune(e.backupDir, keep)
+			removed, err := snapshot.Prune(e.backupDir, int(keep))
 			for _, s := range removed {
 				fmt.Println("pruned", s.Name)
 			}
@@ -400,7 +400,8 @@ func pruneCmd() *cobra.Command {
 			return err
 		},
 	}
-	cmd.Flags().IntVarP(&keep, "keep", "k", 0, "snapshots to keep (default from config)")
+	cmd.Flags().VarP(&keep, "keep", "k", `snapshots to keep, a number or "all" (default from config)`)
+	cmd.Flags().Lookup("keep").DefValue = "" // the real default comes from the config
 	return cmd
 }
 

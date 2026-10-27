@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -19,10 +20,30 @@ import (
 
 const passEnv = "KATBACKUP_PASSPHRASE"
 
+// version can be overridden at build time with
+// -ldflags "-X github.com/devinthemtn/katbackup/internal/cli.version=1.2.3".
+var version = "0.1.0"
+
+// Version is the release tag the binary was built from (e.g. via
+// `go install ...@v0.2.0` or a build at a tagged commit), falling back to version.
+func Version() string {
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		v := bi.Main.Version
+		// Untagged and dirty builds get pseudo-versions like v0.0.0-2026...-abc123+dirty.
+		if strings.HasPrefix(v, "v") && !strings.ContainsAny(v, "-+") {
+			return strings.TrimPrefix(v, "v")
+		}
+	}
+	return version
+}
+
 func Execute() error {
+	v := Version()
 	root := &cobra.Command{
 		Use:           "katbackup",
 		Short:         "Back up and restore your config files into ~/.katConfigBackup",
+		Long:          "katbackup " + v + " — back up and restore your config files into ~/.katConfigBackup",
+		Version:       v,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
