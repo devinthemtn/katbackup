@@ -3,11 +3,16 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -20,21 +25,61 @@ import (
 
 const passEnv = "KATBACKUP_PASSPHRASE"
 
-// version can be overridden at build time with
+// version is set for release builds with
 // -ldflags "-X github.com/devinthemtn/katbackup/internal/cli.version=1.2.3".
-var version = "dev"
+var version string
 
-// Version is the release tag the binary was built from (e.g. via
-// `go install ...@v0.2.0` or a build at a tagged commit), falling back to version.
+// Version is the version this binary reports. Every source of it comes from the
+// git tag, so tagging a release is all it takes to update it.
 func Version() string {
+	var module string
 	if bi, ok := debug.ReadBuildInfo(); ok {
-		v := bi.Main.Version
-		// Untagged and dirty builds get pseudo-versions like v0.0.0-2026...-abc123+dirty.
-		if strings.HasPrefix(v, "v") && !strings.ContainsAny(v, "-+") {
-			return strings.TrimPrefix(v, "v")
-		}
+		module = bi.Main.Version
 	}
-	return version
+	return resolveVersion(version, module, func() string { return gitDescribe(sourceDir()) })
+}
+
+// resolveVersion prefers a version stamped at build time, then the one Go
+// recorded from the module or git, such as v1.2.3, or v1.2.3+dirty for a build
+// with uncommitted changes. `go run` records only "(devel)" or nothing, so it
+// asks git, which is only called when needed.
+func resolveVersion(stamped, module string, describe func() string) string {
+	if stamped != "" {
+		return stamped
+	}
+	if strings.HasPrefix(module, "v") {
+		return strings.TrimPrefix(module, "v")
+	}
+	if v := describe(); v != "" {
+		return v
+	}
+	return "dev"
+}
+
+// sourceDir is the folder this file was compiled from, or "" if the build
+// removed that path. It's used instead of the working directory, which could be
+// some other project's repository.
+func sourceDir() string {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok || !filepath.IsAbs(file) {
+		return ""
+	}
+	return filepath.Dir(file)
+}
+
+// gitDescribe returns the version of the repository at dir, such as 1.2.3,
+// 1.2.3-dirty or 1.2.3-4-gabc1234 for commits after a tag, or "" if unknown.
+func gitDescribe(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", "-C", dir, "describe", "--tags", "--always", "--dirty").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimPrefix(strings.TrimSpace(string(out)), "v")
 }
 
 func Execute() error {

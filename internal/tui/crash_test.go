@@ -22,7 +22,7 @@ func key(s string) tea.KeyMsg {
 // With a filter that matches nothing there are no rows, so moving the cursor
 // must not push it below zero.
 func TestTreeKeysWithNoRows(t *testing.T) {
-	for _, k := range []string{"j", "down", "pgdown", "G", "k", "g", " ", "h", "l", "c", "a"} {
+	for _, k := range []string{"j", "down", "pgdown", "G", "k", "g", " ", "h", "l", "c", "a", "d", "?"} {
 		t.Run(k, func(t *testing.T) {
 			filter := textinput.New()
 			filter.SetValue("matches-nothing")

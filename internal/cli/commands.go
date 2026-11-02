@@ -410,12 +410,18 @@ func tuiCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "tui",
 		Short: "Browse snapshots and pick files to restore",
+		Long:  "Browse snapshots, compare files with what's on disk, and pick files to restore.\n\n" + tui.HelpText,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			e, err := newEnv()
 			if err != nil {
 				return err
 			}
-			return tui.Run(e.home, e.backupDir)
+			// Restoring onto a new machine has no config yet, and doesn't need one.
+			cfg, err := e.loadConfig()
+			if err != nil && !errors.Is(err, config.ErrNotFound) {
+				return err
+			}
+			return tui.Run(e.home, e.backupDir, cfg.DiffTool, Version())
 		},
 	}
 }

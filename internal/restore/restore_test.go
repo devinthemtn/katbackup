@@ -205,3 +205,69 @@ func TestForceStillMovesTypeChanges(t *testing.T) {
 		t.Errorf("content %q", got)
 	}
 }
+
+func TestExtractFile(t *testing.T) {
+	const content = "snapshot version\n"
+	e := fileEntry(".zshrc", content)
+	files := map[string]string{".zshrc": content, ".other": "x"}
+	entries := []archive.Entry{fileEntry(".other", "x"), e}
+
+	src := t.TempDir()
+	for rel, c := range files {
+		put(t, filepath.Join(src, rel), c)
+	}
+	encrypted := filepath.Join(t.TempDir(), "2026-01-01_000000.tar.zst.age")
+	f, err := os.Create(encrypted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Write(f, src, archive.Index{Entries: entries}, "hunter2"); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	plain, _ := build(t, files, entries)
+
+	for _, tc := range []struct{ name, path, pass string }{
+		{"plain", plain, ""},
+		{"encrypted", encrypted, "hunter2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dst := filepath.Join(t.TempDir(), ".zshrc")
+			if err := restore.ExtractFile(tc.path, tc.pass, e, dst); err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(dst)
+			if err != nil || string(got) != content {
+				t.Errorf("content = %q, %v", got, err)
+			}
+			info, err := os.Stat(dst)
+			if err != nil || info.Mode().Perm() != 0o400 {
+				t.Errorf("mode = %v, %v", info.Mode(), err)
+			}
+		})
+	}
+}
+
+func TestExtractFileRefusesCorruptContent(t *testing.T) {
+	e := fileEntry(".zshrc", "what the index says")
+	e.Size = int64(len("what is stored!!!!!"))
+	p, _ := build(t, map[string]string{".zshrc": "what is stored!!!!!"}, []archive.Entry{e})
+	dst := filepath.Join(t.TempDir(), ".zshrc")
+	if err := restore.ExtractFile(p, "", e, dst); err == nil {
+		t.Fatal("expected a checksum error")
+	}
+	if _, err := os.Lstat(dst); !os.IsNotExist(err) {
+		t.Errorf("corrupt copy left behind: %v", err)
+	}
+}
+
+func TestExtractFileMissingEntry(t *testing.T) {
+	p, _ := build(t, map[string]string{".a": "a"}, []archive.Entry{fileEntry(".a", "a")})
+	dst := filepath.Join(t.TempDir(), "out")
+	if err := restore.ExtractFile(p, "", fileEntry(".nope", "b"), dst); err == nil {
+		t.Fatal("expected an error for a missing entry")
+	}
+	if _, err := os.Lstat(dst); !os.IsNotExist(err) {
+		t.Errorf("file left behind: %v", err)
+	}
+}

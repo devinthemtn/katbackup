@@ -212,6 +212,54 @@ func Apply(archivePath, passphrase string, actions []Action, opts Options) ([]st
 	return moved, nil
 }
 
+// ExtractFile writes one file entry's content to dst as a new read-only file,
+// verifying its checksum. dst doesn't exist afterwards if anything went wrong.
+func ExtractFile(archivePath, passphrase string, e archive.Entry, dst string) error {
+	if e.Type != archive.TypeFile {
+		return fmt.Errorf("%s is not a regular file", e.Path)
+	}
+	r, err := archive.Open(archivePath, passphrase)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	for {
+		got, content, err := r.Next()
+		if errors.Is(err, io.EOF) {
+			return fmt.Errorf("%s: missing from archive", e.Path)
+		}
+		if err != nil {
+			return err
+		}
+		if got.Path == e.Path {
+			return extractTo(dst, content, got)
+		}
+	}
+}
+
+func extractTo(dst string, content io.Reader, e archive.Entry) (err error) {
+	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o400)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+		if err != nil {
+			os.Remove(dst)
+		}
+	}()
+	h := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(f, h), content); err != nil {
+		return err
+	}
+	if got := hex.EncodeToString(h.Sum(nil)); got != e.SHA256 {
+		return fmt.Errorf("checksum mismatch: snapshot is corrupt (want %s, got %s)", e.SHA256, got)
+	}
+	return nil
+}
+
 // write puts one entry on disk. moveAside runs only once the new content is
 // known to be good, so a corrupt archive leaves the existing file untouched.
 func write(a Action, content io.Reader, moveAside func() error) error {

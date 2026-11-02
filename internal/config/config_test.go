@@ -36,6 +36,29 @@ func TestKeep(t *testing.T) {
 	}
 }
 
+func TestDiffToolRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	cfg := Default()
+	if err := Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "diff_tool") {
+			t.Errorf("empty diff_tool was written: %q", line)
+		}
+	}
+
+	cfg.DiffTool = `nvim -d "$LOCAL" "$REMOTE"`
+	if err := Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil || got.DiffTool != cfg.DiffTool {
+		t.Errorf("round trip: got %q, %v", got.DiffTool, err)
+	}
+}
+
 func TestSaveKeepRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	for _, k := range []Keep{KeepAll, 3} {

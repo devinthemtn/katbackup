@@ -20,6 +20,9 @@ type Config struct {
 	Exclude []string `toml:"exclude"`
 	// Secrets are only backed up when the snapshot is encrypted.
 	Secrets []string `toml:"secrets"`
+	// DiffTool is the shell command the TUI compares files with. Empty means
+	// whatever `git difftool` is set up to use.
+	DiffTool string `toml:"diff_tool,omitempty"`
 }
 
 var ErrNotFound = errors.New("config not found")
@@ -126,7 +129,8 @@ func Save(path string, cfg Config) error {
 	var buf bytes.Buffer
 	buf.WriteString("# katbackup manifest\n")
 	buf.WriteString("# keep: number of snapshots to retain, or \"all\" to never delete any\n")
-	buf.WriteString("# secrets: only backed up when encrypting (encrypt = true or --encrypt)\n\n")
+	buf.WriteString("# secrets: only backed up when encrypting (encrypt = true or --encrypt)\n")
+	buf.WriteString("# diff_tool: command the TUI compares files with, e.g. 'nvim -d \"$LOCAL\" \"$REMOTE\"' (default: your git diff setup)\n\n")
 	if err := toml.NewEncoder(&buf).Encode(cfg); err != nil {
 		return err
 	}

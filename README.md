@@ -64,7 +64,7 @@ katbackup restore ~/.zshrc .config/nvim -n     # dry run for selected paths
 katbackup restore '.config/**/*.toml' -y       # globs work; -y skips the confirm prompt
 katbackup restore -s 2026-10-26 --to /tmp/out  # pick a snapshot, restore somewhere else
 katbackup restore --force                      # overwrite without keeping .katbak copies
-katbackup tui                                  # browse snapshots, tick files, restore
+katbackup tui                                  # browse snapshots, compare and tick files, restore (? for keys)
 katbackup prune [-k 5 | -k all]               # delete old snapshots (default: keep from config)
 ```
 
@@ -89,6 +89,7 @@ encrypt = false    # true = always encrypt (prompts for a passphrase on every ba
 include = ["~/.zshrc", "~/.gitconfig", "~/.config/nvim", "~/.config/zellij"]
 exclude = ["**/node_modules", "**/.git", "**/*.log", "**/cache"]
 secrets = ["~/.ssh", "~/.config/gh/hosts.yml"]
+diff_tool = 'nvim -d "$LOCAL" "$REMOTE"'   # optional; the TUI's compare command
 ```
 
 | Key | Meaning |
@@ -98,6 +99,9 @@ secrets = ["~/.ssh", "~/.config/gh/hosts.yml"]
 | `include` | Files and folders to back up. Folders are copied with everything inside them. |
 | `exclude` | Globs to skip inside included folders. |
 | `secrets` | Paths that are only backed up into encrypted snapshots. |
+| `diff_tool` | Shell command the TUI's `d` key compares files with. `$LOCAL` is the file on disk and `$REMOTE` is the snapshot's copy; if the command uses neither, both are added to the end, so `"nvim -d"` works. Defaults to `git difftool` if git has a `diff.tool` or `merge.tool` set, and otherwise `git diff --no-index`. |
+
+The TUI comes back as soon as the command exits, so it has to stay running while you look at the diff. GUI tools may need a flag for that (`code --wait --diff`), and tools that only print need a pager (`diff -u "$LOCAL" "$REMOTE" | less`).
 
 ## How it works
 
@@ -109,11 +113,12 @@ secrets = ["~/.ssh", "~/.config/gh/hosts.yml"]
 - `restore` refuses a snapshot containing paths that would land outside the target folder, so a snapshot from elsewhere can't write to unexpected places.
 - `--keep-dir` keeps an unencrypted copy of everything in the staging folder, secrets included, even for an encrypted backup.
 - Anything listed under `secrets`, or matching the built-in credential patterns (`.ssh`, `.gnupg`, `gh/hosts.yml`, …), is only backed up into encrypted snapshots.
+- Comparing a file in the TUI extracts the snapshot's copy to a private temp folder (under `$XDG_RUNTIME_DIR` if set), deleted when the tool exits. For an encrypted snapshot that copy is unencrypted, and katbackup can't clean up anything the tool saves itself, such as vim swap files or an editor's history.
 - Set `KATBACKUP_PASSPHRASE` to skip the passphrase prompt in scripts.
 
 ## TUI keys
 
-`space` select · `a` all · `c` only files that differ from disk · `←/→` fold · `/` filter · `enter` review & restore · `esc` back · `q` quit
+`space` select · `a` all · `c` only files that differ from disk · `d` compare the file with the snapshot's copy · `←/→` fold · `/` filter · `enter` review & restore · `esc` back · `?` help · `q` quit
 
 ## Known limitations
 
