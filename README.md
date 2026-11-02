@@ -93,7 +93,7 @@ secrets = ["~/.ssh", "~/.config/gh/hosts.yml"]
 
 | Key | Meaning |
 |---|---|
-| `keep` | How many snapshots to keep: a number, or `"all"` to never delete any. Defaults to `10`. (`0` also means all.) |
+| `keep` | How many snapshots to keep: a number, or `"all"` to never delete any. Defaults to `10`. (`0` also means all.) Plain and encrypted snapshots count together, and the oldest are deleted first. |
 | `encrypt` | Encrypt every backup, as if you always passed `-e`. |
 | `include` | Files and folders to back up. Folders are copied with everything inside them. |
 | `exclude` | Globs to skip inside included folders. |
@@ -117,7 +117,6 @@ secrets = ["~/.ssh", "~/.config/gh/hosts.yml"]
 
 ## Known limitations
 
-- `keep` counts plain and encrypted snapshots together. If you mostly run plain backups, they can prune away your only encrypted snapshot, and with it your only backup of your secrets. Use `keep = "all"`, a high `keep`, or `encrypt = true` if that matters to you.
 - A file whose only change is its permissions shows as unchanged, so a restore won't put the old permissions back.
 - Secret detection is a fixed list of patterns (see [How it works](#how-it-works)). Add any other credential files to `secrets` yourself, or they'll go into plain snapshots.
 
