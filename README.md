@@ -201,6 +201,7 @@ The TUI comes back as soon as the command exits, so it has to stay running while
 - `--keep-dir` keeps an unencrypted copy of everything in the staging folder, secrets included, even for an encrypted backup.
 - Anything listed under `secrets`, or matching the built-in credential patterns (`.ssh`, `.gnupg`, `gh/hosts.yml`, …), is only backed up into encrypted snapshots.
 - Comparing a file in the TUI extracts the snapshot's copy to a private temp folder (under `$XDG_RUNTIME_DIR` if set), deleted when the tool exits. For an encrypted snapshot that copy is unencrypted, and katbackup can't clean up anything the tool saves itself, such as vim swap files or an editor's history.
+- `.katbak-*` copies and restore's temporary `.katbackup-*` files are never backed up, not even if you list them under `include`. They're copies of real files under names the secret patterns wouldn't recognize, so they could otherwise put a secret into a plain snapshot. katbackup doesn't delete them, so remove them yourself once you're happy with a restore.
 - Set `KATBACKUP_PASSPHRASE` to skip the passphrase prompt in scripts.
 
 ## TUI keys

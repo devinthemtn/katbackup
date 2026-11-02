@@ -536,3 +536,52 @@ func TestLockFileIsNotASnapshot(t *testing.T) {
 		t.Errorf("%d snapshots, want 1", got)
 	}
 }
+
+// A restore over a changed secret leaves a copy beside it. The copy's name doesn't
+// match the secret patterns, so without care it reaches the next plain snapshot.
+func TestRestoreLeftoversStayOutOfSnapshots(t *testing.T) {
+	home, cfg := fakeHome(t)
+	first, err := backup.Run(backup.Options{Home: home, Config: cfg, Passphrase: "pw"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, home, ".config/gh/hosts.yml", "oauth_token: CHANGED\n")
+	idx, err := archive.ReadIndex(first.Archive, "pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, err := restore.Apply(first.Archive, "pw", restore.Plan(idx, restore.Filter([]string{".config/gh/hosts.yml"}, home), home), restore.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(moved) != 1 {
+		t.Fatalf("restore moved %v, want the changed hosts.yml", moved)
+	}
+	if got := read(t, moved[0]); !strings.Contains(got, "CHANGED") {
+		t.Fatalf("moved-aside copy holds %q", got)
+	}
+	// As left by a restore that was killed partway through writing.
+	write(t, home, ".config/gh/.katbackup-123", "oauth_token: PARTIAL\n")
+
+	res, err := backup.Run(backup.Options{Home: home, Config: cfg, Now: time.Now().Add(time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range res.Entries {
+		if strings.Contains(e.Path, ".katbak") || strings.Contains(e.Path, "hosts.yml") {
+			t.Errorf("secret copy in a plain snapshot: %s", e.Path)
+		}
+	}
+	if _, ok := paths(mustIndex(t, res.Archive))[".config/gh/config.yml"]; !ok {
+		t.Error("ordinary file in the same folder was dropped")
+	}
+}
+
+func mustIndex(t *testing.T, file string) archive.Index {
+	t.Helper()
+	idx, err := archive.ReadIndex(file, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return idx
+}

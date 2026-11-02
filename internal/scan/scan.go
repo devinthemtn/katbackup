@@ -67,12 +67,14 @@ var noiseNames = []string{
 	".histfile", ".lesshst", ".viminfo", ".wget-hsts", ".motd_shown",
 	".sudo_as_admin_successful", ".Xauthority", ".xsession-errors",
 	".zcompdump*", "*_history", ".bash_logout", "go", ".katConfigBackup",
+	"*" + paths.RestoreBackupMarker + "*", paths.RestoreTempPrefix + "*",
 }
 
 // noiseConfig are ~/.config entries that are state rather than config.
 var noiseConfig = []string{
 	"go", "pulse", "procps", "dconf", "google-chrome", "chromium", "BraveSoftware",
 	"Code", "discord", "Slack", "*.7z", "*.zip", "*.tar*",
+	"*" + paths.RestoreBackupMarker + "*", paths.RestoreTempPrefix + "*",
 }
 
 // IsSecret reports whether a home-relative path matches a secret pattern,

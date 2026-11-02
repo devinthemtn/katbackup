@@ -13,6 +13,12 @@ import (
 const (
 	BackupDirName = ".katConfigBackup"
 	StagingName   = "staging"
+
+	// RestoreBackupMarker is in the name of a file restore moved aside, as in
+	// hosts.yml.katbak-20261102-150405.
+	RestoreBackupMarker = ".katbak-"
+	// RestoreTempPrefix starts the name of a file restore is still writing.
+	RestoreTempPrefix = ".katbackup-"
 )
 
 // Home returns the current user's home directory.

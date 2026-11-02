@@ -158,7 +158,7 @@ func Apply(archivePath, passphrase string, actions []Action, opts Options) ([]st
 	}
 	defer r.Close()
 
-	suffix := ".katbak-" + time.Now().Format("20060102-150405")
+	suffix := paths.RestoreBackupMarker + time.Now().Format("20060102-150405")
 	var moved []string
 	var dirs []Action
 	total, done := len(todo), 0
@@ -288,7 +288,7 @@ func write(a Action, content io.Reader, moveAside func() error) error {
 		}
 		return os.Symlink(e.LinkTarget, a.Target)
 	case archive.TypeFile:
-		tmp, err := os.CreateTemp(filepath.Dir(a.Target), ".katbackup-*")
+		tmp, err := os.CreateTemp(filepath.Dir(a.Target), paths.RestoreTempPrefix+"*")
 		if err != nil {
 			return err
 		}

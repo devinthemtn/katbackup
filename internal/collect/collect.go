@@ -43,7 +43,15 @@ type Result struct {
 // The backup directory itself is always skipped.
 func Collect(opts Options) (Result, error) {
 	var res Result
-	excludes := []string{paths.BackupDirName}
+	// Restore's leftovers are always skipped. They're copies of real files under
+	// names the secret patterns don't match, so hosts.yml.katbak-… would otherwise
+	// put a token into a plain snapshot. This can't be a default in the config,
+	// because existing configs wouldn't get it.
+	excludes := []string{
+		paths.BackupDirName,
+		"**/*" + paths.RestoreBackupMarker + "*",
+		"**/" + paths.RestoreTempPrefix + "*",
+	}
 	for _, p := range opts.Excludes {
 		excludes = append(excludes, paths.Normalize(p, opts.Home))
 	}

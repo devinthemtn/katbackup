@@ -3,6 +3,7 @@ package collect_test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -188,5 +189,43 @@ func TestParentsComeBeforeChildren(t *testing.T) {
 	}
 	if !(pos[".a"] < pos[".a/b"] && pos[".a/b"] < pos[".a/b/c"]) {
 		t.Errorf("order: %v", pos)
+	}
+}
+
+func TestRestoreLeftoversAreSkippedEverywhere(t *testing.T) {
+	home := t.TempDir()
+	for _, rel := range []string{
+		".zshrc",
+		".zshrc.katbak-20261102-150405",
+		".config/app/server.pem.katbak-20261102-150405",
+		".config/app/old-folder.katbak-20261102-150405/inside",
+		".config/app/.katbackup-123",
+		".config/app/keep.conf",
+		".config/app/.katbackup-settings.conf.bak/x",
+	} {
+		p := filepath.Join(home, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := collect.Collect(collect.Options{
+		Home:     home,
+		Includes: []string{"~/.zshrc", "~/.zshrc.katbak-20261102-150405", "~/.config/app"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, e := range res.Entries {
+		if e.Type == archive.TypeFile {
+			got[e.Path] = true
+		}
+	}
+	want := map[string]bool{".zshrc": true, ".config/app/keep.conf": true}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
 	}
 }
