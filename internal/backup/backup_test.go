@@ -463,3 +463,32 @@ func TestSkipUnchangedDryRun(t *testing.T) {
 		t.Error("dry run didn't report that nothing changed")
 	}
 }
+
+func TestSecretsSkippedIsANoteNotAWarning(t *testing.T) {
+	home, cfg := fakeHome(t)
+	cfg.Include = []string{"~/.zshrc"}
+	res, err := backup.Run(backup.Options{Home: home, Config: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Warnings) != 0 {
+		t.Errorf("a routine plain backup would fail --strict: %v", res.Warnings)
+	}
+	if !strings.Contains(strings.Join(res.Notes, "\n"), "secret") {
+		t.Errorf("no note about skipped secrets: %v", res.Notes)
+	}
+}
+
+func TestMissingIncludeIsAWarning(t *testing.T) {
+	home, cfg := fakeHome(t) // includes ~/.missing
+	res, err := backup.Run(backup.Options{Home: home, Config: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(res.Warnings, "\n"), ".missing") {
+		t.Errorf("no warning about the missing include: %v", res.Warnings)
+	}
+	if res.Archive == "" {
+		t.Error("the snapshot should still be written")
+	}
+}

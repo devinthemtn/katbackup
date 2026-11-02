@@ -126,7 +126,7 @@ func scanCmd() *cobra.Command {
 }
 
 func backupCmd() *cobra.Command {
-	var encrypt, noEncrypt, dryRun, keepDir, always bool
+	var encrypt, noEncrypt, dryRun, keepDir, always, strict bool
 	cmd := &cobra.Command{
 		Use:   "backup",
 		Short: "Copy configured files into ~/.katConfigBackup and compress them",
@@ -150,11 +150,22 @@ func backupCmd() *cobra.Command {
 				Home: e.home, Dir: e.backupDir, Config: cfg, Encrypt: encrypting, Passphrase: pass, DryRun: dryRun, KeepDir: keepDir,
 				SkipUnchanged: !always,
 			})
+			for _, n := range res.Notes {
+				fmt.Fprintln(os.Stderr, "note:", n)
+			}
 			for _, w := range res.Warnings {
 				fmt.Fprintln(os.Stderr, "warning:", w)
 			}
 			if err != nil {
 				return err
+			}
+			// Runs after the snapshot is written, because a mostly complete
+			// snapshot is still better than none.
+			strictErr := func() error {
+				if strict && len(res.Warnings) > 0 {
+					return fmt.Errorf("backup finished with %d warning(s)", len(res.Warnings))
+				}
+				return nil
 			}
 			if dryRun {
 				for _, en := range res.Entries {
@@ -173,7 +184,7 @@ func backupCmd() *cobra.Command {
 				if res.Staging != "" {
 					fmt.Println("staging copy kept at", res.Staging)
 				}
-				return nil
+				return strictErr()
 			}
 			info, _ := os.Stat(res.Archive)
 			var size int64
@@ -187,7 +198,7 @@ func backupCmd() *cobra.Command {
 			for _, p := range res.Pruned {
 				fmt.Println("pruned", p.Name)
 			}
-			return nil
+			return strictErr()
 		},
 	}
 	cmd.Flags().BoolVarP(&encrypt, "encrypt", "e", false, "encrypt with a passphrase and include secrets")
@@ -195,6 +206,7 @@ func backupCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&dryRun, "dry-run", "n", false, "list what would be backed up")
 	cmd.Flags().BoolVar(&keepDir, "keep-dir", false, "keep the uncompressed staging copy")
 	cmd.Flags().BoolVar(&always, "always", false, "write a snapshot even if nothing changed")
+	cmd.Flags().BoolVar(&strict, "strict", false, "exit with an error if there were warnings (the snapshot is still written)")
 	return cmd
 }
 

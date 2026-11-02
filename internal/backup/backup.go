@@ -39,6 +39,7 @@ type Result struct {
 	Entries  []archive.Entry
 	Bytes    int64
 	Warnings []string
+	Notes    []string
 	Pruned   []snapshot.Snapshot
 	// UnchangedSince is the snapshot that made this run unnecessary, if any.
 	UnchangedSince *snapshot.Snapshot
@@ -106,12 +107,12 @@ func Run(opts Options) (res Result, err error) {
 	col, err := collect.Collect(collect.Options{
 		Home: opts.Home, Includes: includes, Excludes: excludes, SkipDir: skipDir, Staging: res.Staging,
 	})
-	res.Entries, res.Bytes, res.Warnings = col.Entries, col.Bytes, col.Warnings
+	res.Entries, res.Bytes, res.Warnings, res.Notes = col.Entries, col.Bytes, col.Warnings, col.Notes
 	if err != nil {
 		return res, err
 	}
 	if !encrypt && (len(cfg.Secrets) > 0) {
-		res.Warnings = append(res.Warnings,
+		res.Notes = append(res.Notes,
 			fmt.Sprintf("%d secret path(s) skipped; use --encrypt to include them", len(cfg.Secrets)))
 	}
 	if encrypt && opts.KeepDir && !opts.DryRun {

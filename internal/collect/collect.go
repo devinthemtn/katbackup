@@ -31,9 +31,12 @@ type Options struct {
 }
 
 type Result struct {
-	Entries  []archive.Entry
+	Entries []archive.Entry
+	// Warnings are things the user may have wanted backed up that weren't.
 	Warnings []string
-	Bytes    int64
+	// Notes are expected on every run, such as a socket in an included folder.
+	Notes []string
+	Bytes int64
 }
 
 // Collect walks every include, skipping excludes, sockets and devices.
@@ -79,7 +82,7 @@ func Collect(opts Options) (Result, error) {
 			e.Type = archive.TypeFile
 			e.Size = info.Size()
 		default:
-			res.Warnings = append(res.Warnings, "skipped special file "+rel)
+			res.Notes = append(res.Notes, "skipped special file "+rel)
 			return nil
 		}
 		if err := stage(abs, opts.Staging, &e); err != nil {
@@ -124,7 +127,7 @@ func Collect(opts Options) (Result, error) {
 			continue
 		}
 		if err == nil && rootInfo.Mode()&fs.ModeSymlink != 0 {
-			res.Warnings = append(res.Warnings,
+			res.Notes = append(res.Notes,
 				fmt.Sprintf("%s is a symlink: only the link is backed up, not what it points to", inc.spec))
 		}
 		err = filepath.WalkDir(root, func(abs string, d fs.DirEntry, err error) error {

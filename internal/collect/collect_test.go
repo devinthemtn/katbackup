@@ -93,8 +93,8 @@ func TestSymlinkedIncludeWarns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !warned(res.Warnings, "symlink") {
-		t.Errorf("no symlink warning: %v", res.Warnings)
+	if !warned(res.Notes, "symlink") {
+		t.Errorf("no symlink note: %v", res.Notes)
 	}
 }
 
