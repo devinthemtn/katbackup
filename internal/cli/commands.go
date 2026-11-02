@@ -126,7 +126,7 @@ func scanCmd() *cobra.Command {
 }
 
 func backupCmd() *cobra.Command {
-	var encrypt, noEncrypt, dryRun, keepDir bool
+	var encrypt, noEncrypt, dryRun, keepDir, always bool
 	cmd := &cobra.Command{
 		Use:   "backup",
 		Short: "Copy configured files into ~/.katConfigBackup and compress them",
@@ -148,6 +148,7 @@ func backupCmd() *cobra.Command {
 			}
 			res, err := backup.Run(backup.Options{
 				Home: e.home, Dir: e.backupDir, Config: cfg, Encrypt: encrypting, Passphrase: pass, DryRun: dryRun, KeepDir: keepDir,
+				SkipUnchanged: !always,
 			})
 			for _, w := range res.Warnings {
 				fmt.Fprintln(os.Stderr, "warning:", w)
@@ -162,6 +163,16 @@ func backupCmd() *cobra.Command {
 					}
 				}
 				fmt.Printf("\n%d entries, %s (dry run, nothing written)\n", len(res.Entries), human(res.Bytes))
+				if res.UnchangedSince != nil {
+					fmt.Printf("no changes since %s, so a backup wouldn't write a snapshot\n", res.UnchangedSince.Name)
+				}
+				return nil
+			}
+			if res.UnchangedSince != nil {
+				fmt.Printf("no changes since %s; nothing written\n", res.UnchangedSince.Name)
+				if res.Staging != "" {
+					fmt.Println("staging copy kept at", res.Staging)
+				}
 				return nil
 			}
 			info, _ := os.Stat(res.Archive)
@@ -183,6 +194,7 @@ func backupCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noEncrypt, "no-encrypt", false, "don't encrypt even if the config says to")
 	cmd.Flags().BoolVarP(&dryRun, "dry-run", "n", false, "list what would be backed up")
 	cmd.Flags().BoolVar(&keepDir, "keep-dir", false, "keep the uncompressed staging copy")
+	cmd.Flags().BoolVar(&always, "always", false, "write a snapshot even if nothing changed")
 	return cmd
 }
 

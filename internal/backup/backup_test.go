@@ -320,3 +320,146 @@ func TestLocationInsideHomeIsNotBackedUp(t *testing.T) {
 		t.Error("nothing was backed up")
 	}
 }
+
+func snapshotCount(t *testing.T, home string) int {
+	t.Helper()
+	snaps, err := snapshot.List(filepath.Join(home, ".katConfigBackup"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(snaps)
+}
+
+func TestSkipUnchanged(t *testing.T) {
+	home, cfg := fakeHome(t)
+	cfg.Keep = 1
+	base := time.Date(2026, 10, 26, 12, 0, 0, 0, time.Local)
+	step := 0
+	run := func(pass string) backup.Result {
+		t.Helper()
+		step++
+		res, err := backup.Run(backup.Options{
+			Home: home, Config: cfg, SkipUnchanged: true, Passphrase: pass,
+			Now: base.Add(time.Duration(step) * time.Minute),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+
+	first := run("")
+	if first.UnchangedSince != nil || first.Archive == "" {
+		t.Fatalf("first backup was skipped: %+v", first)
+	}
+
+	again := run("")
+	if again.UnchangedSince == nil || again.Archive != "" {
+		t.Fatalf("unchanged backup wasn't skipped: %+v", again)
+	}
+	if again.Staging != "" {
+		t.Errorf("staging left behind at %s", again.Staging)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".katConfigBackup", "staging")); !os.IsNotExist(err) {
+		t.Errorf("staging still on disk: %v", err)
+	}
+
+	// Only the modification time differs.
+	future := base.Add(time.Hour)
+	if err := os.Chtimes(filepath.Join(home, ".zshrc"), future, future); err != nil {
+		t.Fatal(err)
+	}
+	if res := run(""); res.UnchangedSince == nil {
+		t.Error("a touched file counted as a change")
+	}
+
+	if err := os.Chmod(filepath.Join(home, ".zshrc"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if res := run(""); res.UnchangedSince != nil {
+		t.Error("a mode change wasn't noticed")
+	}
+
+	write(t, home, ".zshrc", "changed\n")
+	if res := run(""); res.UnchangedSince != nil {
+		t.Error("a content change wasn't noticed")
+	}
+	if got := snapshotCount(t, home); got != 1 {
+		t.Errorf("keep = 1 left %d snapshots", got)
+	}
+}
+
+func TestSkipUnchangedDoesNotPrune(t *testing.T) {
+	home, cfg := fakeHome(t)
+	base := time.Date(2026, 10, 26, 12, 0, 0, 0, time.Local)
+	for i := 0; i < 2; i++ {
+		write(t, home, ".zshrc", strings.Repeat("x", i+1))
+		if _, err := backup.Run(backup.Options{Home: home, Config: cfg, Now: base.Add(time.Duration(i) * time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg.Keep = 1
+	res, err := backup.Run(backup.Options{Home: home, Config: cfg, SkipUnchanged: true, Now: base.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.UnchangedSince == nil || len(res.Pruned) != 0 || snapshotCount(t, home) != 2 {
+		t.Errorf("skipped backup changed the snapshots: %+v", res)
+	}
+}
+
+func TestSkipUnchangedComparesTheSameKind(t *testing.T) {
+	home, cfg := fakeHome(t)
+	base := time.Date(2026, 10, 26, 12, 0, 0, 0, time.Local)
+	if _, err := backup.Run(backup.Options{Home: home, Config: cfg, Passphrase: "pw", Now: base}); err != nil {
+		t.Fatal(err)
+	}
+	// The newest snapshot is encrypted, and there's no plain one to compare with.
+	res, err := backup.Run(backup.Options{Home: home, Config: cfg, SkipUnchanged: true, Now: base.Add(time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.UnchangedSince != nil || res.Archive == "" {
+		t.Fatalf("plain backup matched an encrypted snapshot: %+v", res)
+	}
+	// Now a plain one is newest, but the encrypted run compares with the encrypted one.
+	res, err = backup.Run(backup.Options{Home: home, Config: cfg, Passphrase: "pw", SkipUnchanged: true, Now: base.Add(2 * time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.UnchangedSince == nil || !res.UnchangedSince.Encrypted {
+		t.Errorf("encrypted backup should match the encrypted snapshot: %+v", res.UnchangedSince)
+	}
+}
+
+func TestSkipUnchangedWrongPassphraseStillBacksUp(t *testing.T) {
+	home, cfg := fakeHome(t)
+	base := time.Date(2026, 10, 26, 12, 0, 0, 0, time.Local)
+	if _, err := backup.Run(backup.Options{Home: home, Config: cfg, Passphrase: "old", Now: base}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := backup.Run(backup.Options{Home: home, Config: cfg, Passphrase: "new", SkipUnchanged: true, Now: base.Add(time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Archive == "" {
+		t.Error("no snapshot written")
+	}
+	if !strings.Contains(strings.Join(res.Warnings, "\n"), "couldn't compare") {
+		t.Errorf("no warning about the failed comparison: %v", res.Warnings)
+	}
+}
+
+func TestSkipUnchangedDryRun(t *testing.T) {
+	home, cfg := fakeHome(t)
+	if _, err := backup.Run(backup.Options{Home: home, Config: cfg}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := backup.Run(backup.Options{Home: home, Config: cfg, SkipUnchanged: true, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.UnchangedSince == nil {
+		t.Error("dry run didn't report that nothing changed")
+	}
+}

@@ -27,7 +27,10 @@ type Options struct {
 	Passphrase string // required when Encrypt is set, unless DryRun
 	DryRun     bool
 	KeepDir    bool // keep the uncompressed staging copy
-	Now        time.Time
+	// SkipUnchanged writes nothing if the newest snapshot of the same kind
+	// already holds exactly this.
+	SkipUnchanged bool
+	Now           time.Time
 }
 
 type Result struct {
@@ -37,6 +40,8 @@ type Result struct {
 	Bytes    int64
 	Warnings []string
 	Pruned   []snapshot.Snapshot
+	// UnchangedSince is the snapshot that made this run unnecessary, if any.
+	UnchangedSince *snapshot.Snapshot
 }
 
 func Run(opts Options) (res Result, err error) {
@@ -113,11 +118,23 @@ func Run(opts Options) (res Result, err error) {
 		res.Warnings = append(res.Warnings,
 			fmt.Sprintf("--keep-dir leaves an unencrypted copy of everything, secrets included, in %s", res.Staging))
 	}
+	if opts.SkipUnchanged && len(res.Entries) > 0 {
+		res.UnchangedSince = unchangedSince(dir, res.Entries, encrypt, opts.Passphrase, &res.Warnings)
+	}
 	if opts.DryRun {
 		return res, nil
 	}
 	if len(res.Entries) == 0 {
 		return res, fmt.Errorf("nothing to back up; check include paths in the config")
+	}
+	if res.UnchangedSince != nil {
+		if !opts.KeepDir {
+			if err := os.RemoveAll(res.Staging); err != nil {
+				return res, err
+			}
+			res.Staging = ""
+		}
+		return res, nil
 	}
 
 	host, _ := os.Hostname()
@@ -134,6 +151,37 @@ func Run(opts Options) (res Result, err error) {
 	}
 	res.Pruned, err = snapshot.Prune(dir, int(cfg.Keep))
 	return res, err
+}
+
+// unchangedSince returns the newest snapshot of the same kind if it holds exactly
+// these entries. It only compares like with like, because plain snapshots leave
+// secrets out and would never match an encrypted one. Not being able to compare
+// must never stop a backup, so any failure just means a new snapshot gets written.
+func unchangedSince(dir string, entries []archive.Entry, encrypted bool, pass string, warnings *[]string) *snapshot.Snapshot {
+	snaps, err := snapshot.List(dir)
+	if err != nil {
+		*warnings = append(*warnings, fmt.Sprintf("couldn't check for changes: %v", err))
+		return nil
+	}
+	for _, s := range snaps {
+		if s.Encrypted != encrypted {
+			continue
+		}
+		// A dry run doesn't ask for the passphrase, so it can't look inside.
+		if encrypted && pass == "" {
+			return nil
+		}
+		idx, err := archive.ReadIndex(s.Path, pass)
+		if err != nil {
+			*warnings = append(*warnings, fmt.Sprintf("couldn't compare with %s, so writing a new snapshot: %v", s.Name, err))
+			return nil
+		}
+		if len(archive.Diff(idx.Entries, entries)) > 0 {
+			return nil
+		}
+		return &s
+	}
+	return nil
 }
 
 func writeArchive(path, staging string, idx archive.Index, pass string) error {
