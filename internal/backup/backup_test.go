@@ -1,6 +1,7 @@
 package backup_test
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -584,4 +585,112 @@ func mustIndex(t *testing.T, file string) archive.Index {
 		t.Fatal(err)
 	}
 	return idx
+}
+
+func assertNothingLeftBehind(t *testing.T, home string) {
+	t.Helper()
+	dir := filepath.Join(home, ".katConfigBackup")
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ents {
+		if e.Name() != "lock" {
+			t.Errorf("left behind after an interrupted backup: %s", e.Name())
+		}
+	}
+}
+
+func TestCancelledBeforeCollecting(t *testing.T) {
+	home, cfg := fakeHome(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := backup.Run(backup.Options{Ctx: ctx, Home: home, Config: cfg, Passphrase: "pw"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v", err)
+	}
+	assertNothingLeftBehind(t, home)
+}
+
+// cancelAfter cancels once its Err has been checked enough times, which lands the
+// cancellation inside collecting or writing rather than before either starts.
+type cancelAfter struct {
+	context.Context
+	checks int
+	left   int
+}
+
+func (c *cancelAfter) Err() error {
+	c.checks++
+	if c.left--; c.left < 0 {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestCancelledPartWayThrough(t *testing.T) {
+	// Count the checks in a whole backup, then cancel at each one in turn.
+	home, cfg := fakeHome(t)
+	cfg.Include = []string{"~/.zshrc", "~/.config/nvim", "~/.config/gh"}
+	counter := &cancelAfter{Context: context.Background(), left: 1 << 30}
+	whole, err := backup.Run(backup.Options{Ctx: counter, Home: home, Config: cfg, Passphrase: "pw"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(whole.Archive); err != nil {
+		t.Fatal(err)
+	}
+	if counter.checks < 5 {
+		t.Fatalf("only %d checks, so this doesn't test much", counter.checks)
+	}
+	for at := 0; at < counter.checks; at++ {
+		res, err := backup.Run(backup.Options{
+			Ctx: &cancelAfter{Context: context.Background(), left: at}, Home: home, Config: cfg, Passphrase: "pw",
+		})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelling at check %d: got %v", at, err)
+		}
+		if res.Staging != "" {
+			t.Errorf("check %d: result still names staging %s", at, res.Staging)
+		}
+		assertNothingLeftBehind(t, home)
+	}
+}
+
+func TestCancelledKeepsStagingOnlyWithKeepDir(t *testing.T) {
+	home, cfg := fakeHome(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := backup.Run(backup.Options{Ctx: ctx, Home: home, Config: cfg, KeepDir: true}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".katConfigBackup", "staging")); err != nil {
+		t.Errorf("--keep-dir should keep staging: %v", err)
+	}
+}
+
+func TestNextBackupClearsWhatAKilledRunLeft(t *testing.T) {
+	home, cfg := fakeHome(t)
+	dir := filepath.Join(home, ".katConfigBackup")
+	write(t, dir, "staging/.ssh/id_ed25519", "PRIVATE\n")
+	write(t, dir, "2026-10-26_175200.tar.zst.partial", "half an archive")
+	write(t, dir, "2026-10-26_175200.tar.zst.age.partial", "half an archive")
+	write(t, dir, "my-notes.partial", "not ours")
+
+	res, err := backup.Run(backup.Options{Home: home, Config: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range ents {
+		got = append(got, e.Name())
+	}
+	want := []string{filepath.Base(res.Archive), "lock", "my-notes.partial"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("got %v, want %v", got, want)
+	}
 }

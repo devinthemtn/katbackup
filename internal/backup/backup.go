@@ -2,10 +2,12 @@
 package backup
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,6 +20,9 @@ import (
 )
 
 type Options struct {
+	// Ctx stops the backup when cancelled, cleaning up staging and the partial
+	// archive. Nil means it can't be stopped.
+	Ctx    context.Context
 	Home   string
 	Config config.Config
 	// Dir is where the snapshot goes. Empty means the default location. Any
@@ -45,6 +50,8 @@ type Result struct {
 	// UnchangedSince is the snapshot that made this run unnecessary, if any.
 	UnchangedSince *snapshot.Snapshot
 }
+
+const partialSuffix = ".partial"
 
 // ErrBusy means another backup is running.
 var ErrBusy = errors.New("another backup is already running")
@@ -79,6 +86,9 @@ func Run(opts Options) (res Result, err error) {
 	}
 	if opts.Now.IsZero() {
 		opts.Now = time.Now()
+	}
+	if opts.Ctx == nil {
+		opts.Ctx = context.Background()
 	}
 	// Staging stays in the default location wherever snapshots go, because it
 	// holds plaintext and the snapshot folder may be synced or on a network.
@@ -116,6 +126,7 @@ func Run(opts Options) (res Result, err error) {
 			return res, lockErr
 		}
 		defer unlock()
+		removeStalePartials(dir)
 		res.Staging = filepath.Join(local, paths.StagingName)
 		// Staging holds plaintext copies, secrets included when encrypting.
 		defer func() {
@@ -138,7 +149,7 @@ func Run(opts Options) (res Result, err error) {
 	}
 
 	col, err := collect.Collect(collect.Options{
-		Home: opts.Home, Includes: includes, Excludes: excludes, SkipDir: skipDir, Staging: res.Staging,
+		Ctx: opts.Ctx, Home: opts.Home, Includes: includes, Excludes: excludes, SkipDir: skipDir, Staging: res.Staging,
 	})
 	res.Entries, res.Bytes, res.Warnings, res.Notes = col.Entries, col.Bytes, col.Warnings, col.Notes
 	if err != nil {
@@ -174,7 +185,7 @@ func Run(opts Options) (res Result, err error) {
 	host, _ := os.Hostname()
 	idx := archive.Index{Hostname: host, Created: opts.Now, Entries: res.Entries}
 	res.Archive = snapshot.NewPath(dir, opts.Now, encrypt)
-	if err := writeArchive(res.Archive, res.Staging, idx, opts.Passphrase); err != nil {
+	if err := writeArchive(opts.Ctx, res.Archive, res.Staging, idx, opts.Passphrase); err != nil {
 		return res, err
 	}
 	if !opts.KeepDir {
@@ -218,14 +229,33 @@ func unchangedSince(dir string, entries []archive.Entry, encrypted bool, pass st
 	return nil
 }
 
-func writeArchive(path, staging string, idx archive.Index, pass string) error {
-	tmp := path + ".partial"
+// removeStalePartials clears archives left by a run that was killed outright.
+// Holding the lock means none of them are still being written, and each archive
+// gets a new name, so nothing would ever replace them.
+func removeStalePartials(dir string) {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range ents {
+		name, isPartial := strings.CutSuffix(e.Name(), partialSuffix)
+		if !isPartial || !e.Type().IsRegular() {
+			continue
+		}
+		if _, ok := snapshot.Parse(name); ok {
+			os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
+}
+
+func writeArchive(ctx context.Context, path, staging string, idx archive.Index, pass string) error {
+	tmp := path + partialSuffix
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
 	defer os.Remove(tmp)
-	if err := archive.Write(f, staging, idx, pass); err != nil {
+	if err := archive.Write(collect.CancelWriter{Ctx: ctx, W: f}, staging, idx, pass); err != nil {
 		f.Close()
 		return err
 	}

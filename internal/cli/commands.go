@@ -1,11 +1,14 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -146,7 +149,16 @@ func backupCmd() *cobra.Command {
 					return err
 				}
 			}
+			// Dying on a signal would skip the cleanup and leave plaintext in staging.
+			// Set up after the passphrase prompt, so Ctrl-C there still just quits.
+			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+			defer stop()
+			go func() {
+				<-ctx.Done()
+				stop() // a second signal kills it outright, if cleanup ever hangs
+			}()
 			res, err := backup.Run(backup.Options{
+				Ctx:  ctx,
 				Home: e.home, Dir: e.backupDir, Config: cfg, Encrypt: encrypting, Passphrase: pass, DryRun: dryRun, KeepDir: keepDir,
 				SkipUnchanged: !always,
 			})
@@ -164,6 +176,9 @@ func backupCmd() *cobra.Command {
 			}
 			for _, w := range res.Warnings {
 				fmt.Fprintln(os.Stderr, "warning:", w)
+			}
+			if errors.Is(err, context.Canceled) {
+				return errors.New("backup interrupted; no snapshot was written")
 			}
 			if err != nil {
 				return err

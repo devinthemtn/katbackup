@@ -2,6 +2,7 @@
 package collect
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -19,6 +20,8 @@ import (
 )
 
 type Options struct {
+	// Ctx stops the collection when cancelled. Nil means it can't be stopped.
+	Ctx      context.Context
 	Home     string
 	Includes []string // user patterns, e.g. "~/.config/nvim"
 	Excludes []string // user patterns, e.g. "**/node_modules"
@@ -43,6 +46,10 @@ type Result struct {
 // The backup directory itself is always skipped.
 func Collect(opts Options) (Result, error) {
 	var res Result
+	ctx := opts.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	// Restore's leftovers are always skipped. They're copies of real files under
 	// names the secret patterns don't match, so hosts.yml.katbak-… would otherwise
 	// put a token into a plain snapshot. This can't be a default in the config,
@@ -93,7 +100,7 @@ func Collect(opts Options) (Result, error) {
 			res.Notes = append(res.Notes, "skipped special file "+rel)
 			return nil
 		}
-		if err := stage(abs, opts.Staging, &e); err != nil {
+		if err := stage(ctx, abs, opts.Staging, &e); err != nil {
 			var src *sourceError
 			if errors.As(err, &src) {
 				return skip(src.err)
@@ -139,6 +146,9 @@ func Collect(opts Options) (Result, error) {
 				fmt.Sprintf("%s is a symlink: only the link is backed up, not what it points to", inc.spec))
 		}
 		err = filepath.WalkDir(root, func(abs string, d fs.DirEntry, err error) error {
+			if cerr := ctx.Err(); cerr != nil {
+				return cerr
+			}
 			if err != nil {
 				res.Warnings = append(res.Warnings, err.Error())
 				if d != nil && d.IsDir() {
@@ -188,6 +198,19 @@ func symlinkParent(symlinks map[string]bool, rel string) string {
 	return ""
 }
 
+// CancelWriter fails writes once Ctx is cancelled, so a long copy stops promptly.
+type CancelWriter struct {
+	Ctx context.Context
+	W   io.Writer
+}
+
+func (w CancelWriter) Write(p []byte) (int, error) {
+	if err := w.Ctx.Err(); err != nil {
+		return 0, err
+	}
+	return w.W.Write(p)
+}
+
 // sourceError marks a failure reading the file being backed up, as opposed to
 // writing the staging copy. The first skips one file; the second aborts.
 type sourceError struct{ err error }
@@ -206,7 +229,7 @@ func (s sourceReader) Read(p []byte) (int, error) {
 }
 
 // stage hashes a file and, when staging is set, copies it there.
-func stage(abs, staging string, e *archive.Entry) error {
+func stage(ctx context.Context, abs, staging string, e *archive.Entry) error {
 	var dst string
 	if staging != "" {
 		dst = filepath.Join(staging, filepath.FromSlash(e.Path))
@@ -241,7 +264,9 @@ func stage(abs, staging string, e *archive.Entry) error {
 		}
 		// Copy exactly the size recorded so the tar header stays truthful
 		// even if the file is being written to while we back it up.
-		n, err := io.Copy(w, io.LimitReader(sourceReader{src}, e.Size))
+		// Cancelling fails on the writing side, because a failed read only skips
+		// the one file and the backup would carry on.
+		n, err := io.Copy(CancelWriter{ctx, w}, io.LimitReader(sourceReader{src}, e.Size))
 		if err != nil {
 			if dst != "" {
 				os.Remove(dst)
