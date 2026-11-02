@@ -116,9 +116,6 @@ type env struct {
 	home      string
 	backupDir string
 	cfgPath   string
-	// dirOverride is the backup location when it came from --dir or the
-	// environment rather than the config, and "" otherwise.
-	dirOverride string
 }
 
 // newEnv is for commands that don't touch snapshots. It doesn't read the config,
@@ -143,7 +140,7 @@ func openEnv() (env, error) {
 		return e, err
 	}
 	if override != "" {
-		e.backupDir, e.dirOverride = override, override
+		e.backupDir = override
 		return e, nil
 	}
 	cfg, err := e.loadConfig()

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/devinthemtn/katbackup/internal/archive"
@@ -43,6 +44,31 @@ type Result struct {
 	Pruned   []snapshot.Snapshot
 	// UnchangedSince is the snapshot that made this run unnecessary, if any.
 	UnchangedSince *snapshot.Snapshot
+}
+
+// ErrBusy means another backup is running.
+var ErrBusy = errors.New("another backup is already running")
+
+// lock stops two backups overlapping, such as a scheduled one starting during a
+// manual one. They share a staging folder, so the second would delete files the
+// first is still reading. The kernel drops the lock when the process ends, even
+// if it's killed, so a crash can't leave backups blocked.
+func lock(dir string) (func(), error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, ErrBusy
+		}
+		return nil, fmt.Errorf("lock backups: %w", err)
+	}
+	return func() { f.Close() }, nil
 }
 
 func Run(opts Options) (res Result, err error) {
@@ -83,6 +109,13 @@ func Run(opts Options) (res Result, err error) {
 	}
 
 	if !opts.DryRun {
+		// Taken before touching staging, which the other run is using. Not
+		// `unlock, err :=`: the cleanup below has to see the function's err.
+		unlock, lockErr := lock(local)
+		if lockErr != nil {
+			return res, lockErr
+		}
+		defer unlock()
 		res.Staging = filepath.Join(local, paths.StagingName)
 		// Staging holds plaintext copies, secrets included when encrypting.
 		defer func() {

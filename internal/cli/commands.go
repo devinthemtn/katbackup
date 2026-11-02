@@ -126,7 +126,7 @@ func scanCmd() *cobra.Command {
 }
 
 func backupCmd() *cobra.Command {
-	var encrypt, noEncrypt, dryRun, keepDir, always, strict bool
+	var encrypt, noEncrypt, dryRun, keepDir, always, strict, quiet bool
 	cmd := &cobra.Command{
 		Use:   "backup",
 		Short: "Copy configured files into ~/.katConfigBackup and compress them",
@@ -150,8 +150,17 @@ func backupCmd() *cobra.Command {
 				Home: e.home, Dir: e.backupDir, Config: cfg, Encrypt: encrypting, Passphrase: pass, DryRun: dryRun, KeepDir: keepDir,
 				SkipUnchanged: !always,
 			})
-			for _, n := range res.Notes {
-				fmt.Fprintln(os.Stderr, "note:", n)
+			if !quiet {
+				for _, n := range res.Notes {
+					fmt.Fprintln(os.Stderr, "note:", n)
+				}
+			}
+			// Warnings and errors always print. cron mails any output, so --quiet
+			// means a mail is worth reading.
+			say := func(format string, a ...any) {
+				if !quiet {
+					fmt.Printf(format, a...)
+				}
 			}
 			for _, w := range res.Warnings {
 				fmt.Fprintln(os.Stderr, "warning:", w)
@@ -180,9 +189,9 @@ func backupCmd() *cobra.Command {
 				return nil
 			}
 			if res.UnchangedSince != nil {
-				fmt.Printf("no changes since %s; nothing written\n", res.UnchangedSince.Name)
+				say("no changes since %s; nothing written\n", res.UnchangedSince.Name)
 				if res.Staging != "" {
-					fmt.Println("staging copy kept at", res.Staging)
+					say("staging copy kept at %s\n", res.Staging)
 				}
 				return strictErr()
 			}
@@ -191,12 +200,12 @@ func backupCmd() *cobra.Command {
 			if info != nil {
 				size = info.Size()
 			}
-			fmt.Printf("backed up %d entries (%s) → %s (%s)\n", len(res.Entries), human(res.Bytes), res.Archive, human(size))
+			say("backed up %d entries (%s) → %s (%s)\n", len(res.Entries), human(res.Bytes), res.Archive, human(size))
 			if res.Staging != "" {
-				fmt.Println("staging copy kept at", res.Staging)
+				say("staging copy kept at %s\n", res.Staging)
 			}
 			for _, p := range res.Pruned {
-				fmt.Println("pruned", p.Name)
+				say("pruned %s\n", p.Name)
 			}
 			return strictErr()
 		},
@@ -206,6 +215,7 @@ func backupCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&dryRun, "dry-run", "n", false, "list what would be backed up")
 	cmd.Flags().BoolVar(&keepDir, "keep-dir", false, "keep the uncompressed staging copy")
 	cmd.Flags().BoolVar(&always, "always", false, "write a snapshot even if nothing changed")
+	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "only print warnings and errors, for cron and other schedulers")
 	cmd.Flags().BoolVar(&strict, "strict", false, "exit with an error if there were warnings (the snapshot is still written)")
 	return cmd
 }

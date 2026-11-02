@@ -1,9 +1,11 @@
 package backup_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -490,5 +492,47 @@ func TestMissingIncludeIsAWarning(t *testing.T) {
 	}
 	if res.Archive == "" {
 		t.Error("the snapshot should still be written")
+	}
+}
+
+func TestOverlappingBackupIsRefused(t *testing.T) {
+	home, cfg := fakeHome(t)
+	dir := filepath.Join(home, ".katConfigBackup")
+	write(t, dir, "staging/in-use", "the other run is reading this")
+	f, err := os.OpenFile(filepath.Join(dir, "lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := backup.Run(backup.Options{Home: home, Config: cfg}); !errors.Is(err, backup.ErrBusy) {
+		t.Fatalf("got %v, want ErrBusy", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "staging", "in-use")); err != nil {
+		t.Errorf("refused backup touched the other run's staging: %v", err)
+	}
+	// Previewing writes nothing, so it doesn't need the lock.
+	if _, err := backup.Run(backup.Options{Home: home, Config: cfg, DryRun: true}); err != nil {
+		t.Errorf("dry run during a backup: %v", err)
+	}
+
+	f.Close() // what the kernel does if the other run dies
+	if _, err := backup.Run(backup.Options{Home: home, Config: cfg}); err != nil {
+		t.Errorf("backup after the lock was released: %v", err)
+	}
+	if _, err := backup.Run(backup.Options{Home: home, Config: cfg, Now: time.Now().Add(time.Minute)}); err != nil {
+		t.Errorf("run didn't release its own lock: %v", err)
+	}
+}
+
+func TestLockFileIsNotASnapshot(t *testing.T) {
+	home, cfg := fakeHome(t)
+	if _, err := backup.Run(backup.Options{Home: home, Config: cfg}); err != nil {
+		t.Fatal(err)
+	}
+	if got := snapshotCount(t, home); got != 1 {
+		t.Errorf("%d snapshots, want 1", got)
 	}
 }

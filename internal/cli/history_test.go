@@ -282,3 +282,56 @@ func TestStatusDiffLogRun(t *testing.T) {
 		}
 	}
 }
+
+// captureOutput returns what fn prints to stdout and stderr.
+func captureOutput(t *testing.T, fn func()) string {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	stdout, stderr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = f, f
+	defer func() { os.Stdout, os.Stderr = stdout, stderr }()
+	fn()
+	b, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// cron mails any output, so a healthy run has to print nothing at all.
+func TestBackupQuiet(t *testing.T) {
+	home := cliHome(t, `include = ["~/.zshrc"]
+secrets = ["~/.ssh"]
+keep = 1`)
+	for _, name := range []string{"first run", "nothing changed", "changed, and prunes"} {
+		out := captureOutput(t, func() {
+			if err := runCLI(t, "backup", "--quiet", "--strict"); err != nil {
+				t.Errorf("%s: %v", name, err)
+			}
+		})
+		if out != "" {
+			t.Errorf("%s printed %q", name, out)
+		}
+		if name == "nothing changed" {
+			if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte("b"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+func TestBackupQuietStillPrintsWarnings(t *testing.T) {
+	cliHome(t, `include = ["~/.zshrc", "~/.missing"]`)
+	out := captureOutput(t, func() {
+		if err := runCLI(t, "backup", "--quiet"); err != nil {
+			t.Error(err)
+		}
+	})
+	if !strings.Contains(out, "warning: missing ~/.missing") {
+		t.Errorf("warning was hidden: %q", out)
+	}
+}
