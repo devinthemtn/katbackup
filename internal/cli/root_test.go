@@ -73,3 +73,58 @@ func TestSourceDirIsThisPackage(t *testing.T) {
 		t.Errorf("sourceDir() = %q: %v", sourceDir(), err)
 	}
 }
+
+func TestOpenEnvLocationPrecedence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv(dirEnv, "")
+	t.Cleanup(func() { dirFlag = "" })
+
+	check := func(name, wantDir, wantOverride string) {
+		t.Helper()
+		e, err := openEnv()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if e.backupDir != wantDir || e.dirOverride != wantOverride {
+			t.Errorf("%s: got dir %q override %q, want %q and %q", name, e.backupDir, e.dirOverride, wantDir, wantOverride)
+		}
+	}
+
+	check("no config", filepath.Join(home, ".katConfigBackup"), "")
+
+	cfg := filepath.Join(home, ".config", "katbackup", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(cfg), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg, []byte(`dir = "~/from-config"`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	check("config", filepath.Join(home, "from-config"), "")
+
+	t.Setenv(dirEnv, "/from/env")
+	check("env beats config", "/from/env", "/from/env")
+
+	dirFlag = "/from/flag"
+	check("flag beats env", "/from/flag", "/from/flag")
+
+	// An override means the config isn't needed, so a broken one doesn't matter.
+	if err := os.WriteFile(cfg, []byte(`not toml`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	check("flag with a broken config", "/from/flag", "/from/flag")
+
+	dirFlag = ""
+	t.Setenv(dirEnv, "")
+	if _, err := openEnv(); err == nil {
+		t.Error("broken config should be reported when the location depends on it")
+	}
+}
+
+func TestDirOverrideExpandsTilde(t *testing.T) {
+	got, err := dirOverride("", "~/backups", "/home/me")
+	if err != nil || got != "/home/me/backups" {
+		t.Errorf("got %q, %v", got, err)
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/devinthemtn/katbackup/internal/archive"
 	"github.com/devinthemtn/katbackup/internal/paths"
@@ -21,6 +22,9 @@ type Options struct {
 	Home     string
 	Includes []string // user patterns, e.g. "~/.config/nvim"
 	Excludes []string // user patterns, e.g. "**/node_modules"
+	// SkipDir is a home-relative folder to leave out, matched literally rather
+	// than as a glob. It's for a backup location inside the home folder.
+	SkipDir string
 	// Staging is the directory files are copied into. Empty means only
 	// enumerate (dry run); entries are still hashed from their source.
 	Staging string
@@ -39,6 +43,12 @@ func Collect(opts Options) (Result, error) {
 	excludes := []string{paths.BackupDirName}
 	for _, p := range opts.Excludes {
 		excludes = append(excludes, paths.Normalize(p, opts.Home))
+	}
+	excluded := func(rel string) bool {
+		if opts.SkipDir != "" && (rel == opts.SkipDir || strings.HasPrefix(rel, opts.SkipDir+"/")) {
+			return true
+		}
+		return paths.MatchAny(excludes, rel)
 	}
 	seen := map[string]bool{}
 	symlinks := map[string]bool{}
@@ -105,7 +115,7 @@ func Collect(opts Options) (Result, error) {
 
 	for _, inc := range includes {
 		root, rootRel := inc.abs, inc.rel
-		if paths.MatchAny(excludes, rootRel) {
+		if excluded(rootRel) {
 			continue
 		}
 		rootInfo, err := os.Lstat(root)
@@ -129,7 +139,7 @@ func Collect(opts Options) (Result, error) {
 			if err != nil {
 				return err
 			}
-			if paths.MatchAny(excludes, rel) {
+			if excluded(rel) {
 				if d.IsDir() {
 					return fs.SkipDir
 				}

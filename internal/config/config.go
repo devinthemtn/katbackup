@@ -23,6 +23,8 @@ type Config struct {
 	// DiffTool is the shell command the TUI compares files with. Empty means
 	// whatever `git difftool` is set up to use.
 	DiffTool string `toml:"diff_tool,omitempty"`
+	// Dir is where snapshots are stored. Empty means ~/.katConfigBackup.
+	Dir string `toml:"dir,omitempty"`
 }
 
 var ErrNotFound = errors.New("config not found")
@@ -130,7 +132,8 @@ func Save(path string, cfg Config) error {
 	buf.WriteString("# katbackup manifest\n")
 	buf.WriteString("# keep: number of snapshots to retain, or \"all\" to never delete any\n")
 	buf.WriteString("# secrets: only backed up when encrypting (encrypt = true or --encrypt)\n")
-	buf.WriteString("# diff_tool: command the TUI compares files with, e.g. 'nvim -d \"$LOCAL\" \"$REMOTE\"' (default: your git diff setup)\n\n")
+	buf.WriteString("# diff_tool: command the TUI compares files with, e.g. 'nvim -d \"$LOCAL\" \"$REMOTE\"' (default: your git diff setup)\n")
+	buf.WriteString("# dir: folder to store snapshots in; it must already exist (default: ~/.katConfigBackup)\n\n")
 	if err := toml.NewEncoder(&buf).Encode(cfg); err != nil {
 		return err
 	}

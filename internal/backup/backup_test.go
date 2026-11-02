@@ -258,3 +258,65 @@ func TestPrune(t *testing.T) {
 		t.Fatalf("find: %v %v", s, err)
 	}
 }
+
+func TestCustomLocation(t *testing.T) {
+	home, cfg := fakeHome(t)
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	res, err := backup.Run(backup.Options{Home: home, Config: cfg, Dir: dir, KeepDir: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(res.Archive) != dir {
+		t.Errorf("archive went to %s, want %s", res.Archive, dir)
+	}
+	if want := filepath.Join(home, ".katConfigBackup", "staging"); res.Staging != want {
+		t.Errorf("staging is at %s, want %s", res.Staging, want)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "staging")); !os.IsNotExist(err) {
+		t.Errorf("plaintext staging in the backup location: %v", err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o750 {
+		t.Errorf("custom location's mode changed to %o", got)
+	}
+}
+
+func TestMissingCustomLocationIsNotCreated(t *testing.T) {
+	home, cfg := fakeHome(t)
+	dir := filepath.Join(t.TempDir(), "unplugged", "drive")
+	for name, dry := range map[string]bool{"backup": false, "dry run": true} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := backup.Run(backup.Options{Home: home, Config: cfg, Dir: dir, DryRun: dry}); err == nil {
+				t.Fatal("no error for a missing location")
+			}
+			if _, err := os.Stat(filepath.Dir(dir)); !os.IsNotExist(err) {
+				t.Errorf("location was created: %v", err)
+			}
+		})
+	}
+}
+
+func TestLocationInsideHomeIsNotBackedUp(t *testing.T) {
+	home, cfg := fakeHome(t)
+	// Brackets would be a glob if this were matched as a pattern.
+	dir := filepath.Join(home, ".config", "nvim", "back[ups]")
+	write(t, dir, "old-file", "from an earlier snapshot")
+	res, err := backup.Run(backup.Options{Home: home, Config: cfg, Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range res.Entries {
+		if strings.Contains(e.Path, "back[ups]") {
+			t.Errorf("backup location was backed up: %s", e.Path)
+		}
+	}
+	if len(res.Entries) == 0 {
+		t.Error("nothing was backed up")
+	}
+}

@@ -131,7 +131,7 @@ func backupCmd() *cobra.Command {
 		Use:   "backup",
 		Short: "Copy configured files into ~/.katConfigBackup and compress them",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			e, err := newEnv()
+			e, err := openEnv()
 			if err != nil {
 				return err
 			}
@@ -147,7 +147,7 @@ func backupCmd() *cobra.Command {
 				}
 			}
 			res, err := backup.Run(backup.Options{
-				Home: e.home, Config: cfg, Encrypt: encrypting, Passphrase: pass, DryRun: dryRun, KeepDir: keepDir,
+				Home: e.home, Dir: e.backupDir, Config: cfg, Encrypt: encrypting, Passphrase: pass, DryRun: dryRun, KeepDir: keepDir,
 			})
 			for _, w := range res.Warnings {
 				fmt.Fprintln(os.Stderr, "warning:", w)
@@ -193,7 +193,7 @@ func listCmd() *cobra.Command {
 		Aliases: []string{"ls"},
 		Short:   "List snapshots",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			e, err := newEnv()
+			e, err := openEnv()
 			if err != nil {
 				return err
 			}
@@ -222,7 +222,7 @@ func listCmd() *cobra.Command {
 				return json.NewEncoder(os.Stdout).Encode(rows)
 			}
 			if len(rows) == 0 {
-				fmt.Println("no snapshots yet; run `katbackup backup`")
+				fmt.Printf("no snapshots in %s; run `katbackup backup`\n", e.backupDir)
 				return nil
 			}
 			tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
@@ -261,7 +261,7 @@ func showCmd() *cobra.Command {
 		Short: "List files in a snapshot (latest by default)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			e, err := newEnv()
+			e, err := openEnv()
 			if err != nil {
 				return err
 			}
@@ -321,7 +321,7 @@ func restoreCmd() *cobra.Command {
   katbackup restore -s 2026-10-26 '.config/**/*.toml' --dry-run
   katbackup restore --to /tmp/out          # extract somewhere else`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			e, err := newEnv()
+			e, err := openEnv()
 			if err != nil {
 				return err
 			}
@@ -380,7 +380,7 @@ func pruneCmd() *cobra.Command {
 		Use:   "prune",
 		Short: "Delete old snapshots",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			e, err := newEnv()
+			e, err := openEnv()
 			if err != nil {
 				return err
 			}
@@ -412,7 +412,7 @@ func tuiCmd() *cobra.Command {
 		Short: "Browse snapshots and pick files to restore",
 		Long:  "Browse snapshots, compare files with what's on disk, and pick files to restore.\n\n" + tui.HelpText,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			e, err := newEnv()
+			e, err := openEnv()
 			if err != nil {
 				return err
 			}

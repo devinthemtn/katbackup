@@ -17,8 +17,12 @@ import (
 )
 
 type Options struct {
-	Home       string
-	Config     config.Config
+	Home   string
+	Config config.Config
+	// Dir is where the snapshot goes. Empty means the default location. Any
+	// other folder has to exist already: creating it could hide an unmounted
+	// drive by quietly writing to the local disk instead.
+	Dir        string
 	Encrypt    bool   // encrypt and include secrets
 	Passphrase string // required when Encrypt is set, unless DryRun
 	DryRun     bool
@@ -44,7 +48,24 @@ func Run(opts Options) (res Result, err error) {
 	if opts.Now.IsZero() {
 		opts.Now = time.Now()
 	}
-	dir := paths.BackupDir(opts.Home)
+	// Staging stays in the default location wherever snapshots go, because it
+	// holds plaintext and the snapshot folder may be synced or on a network.
+	local := paths.BackupDir(opts.Home)
+	dir := local
+	var skipDir string
+	if opts.Dir != "" && filepath.Clean(opts.Dir) != local {
+		dir = filepath.Clean(opts.Dir)
+		info, err := os.Stat(dir)
+		if err != nil {
+			return res, fmt.Errorf("backup location %s isn't available (create it, or mount the drive it's on): %w", dir, err)
+		}
+		if !info.IsDir() {
+			return res, fmt.Errorf("backup location %s is not a folder", dir)
+		}
+		if rel, err := paths.RelToHome(dir, opts.Home); err == nil {
+			skipDir = rel
+		}
+	}
 
 	includes := append([]string(nil), cfg.Include...)
 	excludes := append([]string(nil), cfg.Exclude...)
@@ -56,11 +77,11 @@ func Run(opts Options) (res Result, err error) {
 	}
 
 	if !opts.DryRun {
-		res.Staging = filepath.Join(dir, paths.StagingName)
+		res.Staging = filepath.Join(local, paths.StagingName)
 		// Staging holds plaintext copies, secrets included when encrypting.
 		defer func() {
 			if err != nil && !opts.KeepDir {
-				os.RemoveAll(filepath.Join(dir, paths.StagingName))
+				os.RemoveAll(filepath.Join(local, paths.StagingName))
 				res.Staging = ""
 			}
 		}()
@@ -70,13 +91,15 @@ func Run(opts Options) (res Result, err error) {
 		if err := os.MkdirAll(res.Staging, 0o700); err != nil {
 			return res, err
 		}
-		if err := os.Chmod(dir, 0o700); err != nil {
+		// A custom location keeps its own permissions: it may be shared on
+		// purpose, and chmod can fail on a network mount.
+		if err := os.Chmod(local, 0o700); err != nil {
 			return res, err
 		}
 	}
 
 	col, err := collect.Collect(collect.Options{
-		Home: opts.Home, Includes: includes, Excludes: excludes, Staging: res.Staging,
+		Home: opts.Home, Includes: includes, Excludes: excludes, SkipDir: skipDir, Staging: res.Staging,
 	})
 	res.Entries, res.Bytes, res.Warnings = col.Entries, col.Bytes, col.Warnings
 	if err != nil {

@@ -23,7 +23,13 @@ import (
 	"github.com/devinthemtn/katbackup/internal/snapshot"
 )
 
-const passEnv = "KATBACKUP_PASSPHRASE"
+const (
+	passEnv = "KATBACKUP_PASSPHRASE"
+	dirEnv  = "KATBACKUP_DIR"
+)
+
+// dirFlag is the value of the global --dir flag.
+var dirFlag string
 
 // version is set for release builds with
 // -ldflags "-X github.com/devinthemtn/katbackup/internal/cli.version=1.2.3".
@@ -92,6 +98,8 @@ func Execute() error {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	root.PersistentFlags().StringVar(&dirFlag, "dir", "",
+		"folder snapshots are stored in (default: $"+dirEnv+", then dir in the config, then ~/"+paths.BackupDirName+")")
 	root.AddCommand(
 		initCmd(), scanCmd(), backupCmd(), listCmd(), showCmd(),
 		restoreCmd(), pruneCmd(), tuiCmd(),
@@ -103,14 +111,62 @@ type env struct {
 	home      string
 	backupDir string
 	cfgPath   string
+	// dirOverride is the backup location when it came from --dir or the
+	// environment rather than the config, and "" otherwise.
+	dirOverride string
 }
 
+// newEnv is for commands that don't touch snapshots. It doesn't read the config,
+// so a broken one can't stop `init --force` from replacing it.
 func newEnv() (env, error) {
 	home, err := paths.Home()
 	if err != nil {
 		return env{}, err
 	}
 	return env{home: home, backupDir: paths.BackupDir(home), cfgPath: paths.ConfigFile(home)}, nil
+}
+
+// openEnv is newEnv plus the backup location. A missing config is fine, because
+// restoring onto a new machine doesn't need one.
+func openEnv() (env, error) {
+	e, err := newEnv()
+	if err != nil {
+		return e, err
+	}
+	override, err := dirOverride(dirFlag, os.Getenv(dirEnv), e.home)
+	if err != nil {
+		return e, err
+	}
+	if override != "" {
+		e.backupDir, e.dirOverride = override, override
+		return e, nil
+	}
+	cfg, err := e.loadConfig()
+	if err != nil && !errors.Is(err, config.ErrNotFound) {
+		return e, err
+	}
+	if cfg.Dir != "" {
+		e.backupDir = paths.Expand(cfg.Dir, e.home)
+	}
+	return e, nil
+}
+
+// dirOverride resolves a location given on the command line or in the
+// environment, with the flag first. Unlike a value in the config, a relative
+// path here means relative to the working directory.
+func dirOverride(flag, environ, home string) (string, error) {
+	p := flag
+	if p == "" {
+		p = environ
+	}
+	switch {
+	case p == "":
+		return "", nil
+	case p == "~" || strings.HasPrefix(p, "~/"):
+		return paths.Expand(p, home), nil
+	default:
+		return filepath.Abs(p)
+	}
 }
 
 func (e env) loadConfig() (config.Config, error) {
