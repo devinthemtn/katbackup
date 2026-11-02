@@ -4,12 +4,26 @@ Back up your Linux config files into `~/.katConfigBackup` as compressed, timesta
 
 ## Install
 
-**You need** Go 1.21 or newer and git. The project needs Go 1.26, but Go 1.21 and later download the right version automatically the first time you build. See [upgrade-go.md](upgrade-go.md) if you want to upgrade your system Go.
+katbackup runs on Linux, on amd64 and arm64.
+
+### Download a release
+
+Download the tarball for your machine and `checksums.txt` from the [releases page](https://github.com/devinthemtn/katbackup/releases), then check and install it:
 
 ```sh
-git clone https://github.com/devinthemtn/katbackup.git   # or wherever the repo lives
-cd katbackup
-go install ./cmd/katbackup
+sha256sum --check --ignore-missing checksums.txt
+tar -xzf katbackup_*_linux_amd64.tar.gz katbackup   # or linux_arm64
+install -D katbackup ~/.local/bin/katbackup
+```
+
+Make sure `~/.local/bin` is on your `PATH`.
+
+### Build with Go
+
+You need Go 1.21 or newer. The project needs a newer Go than that, but Go 1.21 and later download the right version automatically the first time you build. To install or upgrade Go itself, see [go.dev/doc/install](https://go.dev/doc/install).
+
+```sh
+go install github.com/devinthemtn/katbackup/cmd/katbackup@latest
 ```
 
 `go install` puts the program in `~/go/bin`. Make sure that folder is on your `PATH` (for example in `~/.zshrc`):
@@ -18,11 +32,9 @@ go install ./cmd/katbackup
 export PATH="$HOME/go/bin:$PATH"
 ```
 
-Then check it works with `katbackup --version` (or `katbackup --help`, which shows the version at the top).
+To build from a clone instead, run `go build -o katbackup ./cmd/katbackup`, then run it as `./katbackup`.
 
-The version comes from the git tag you build from, such as `v0.2.0`. Untagged builds report the default set in `internal/cli/root.go`.
-
-If you'd rather not install it, `go build -o katbackup ./cmd/katbackup` builds it in the project folder, and you run it as `./katbackup`.
+Check it works with `katbackup --version` (or `katbackup --help`, which shows the version at the top). Builds that aren't from a release tag report `dev`.
 
 ## First run
 
@@ -91,10 +103,24 @@ secrets = ["~/.ssh", "~/.config/gh/hosts.yml"]
 
 - `backup` copies the files into `~/.katConfigBackup/staging`, writes them to a `tar` compressed with zstd (and encrypted with age if requested), then deletes the staging copy (`--keep-dir` keeps it) and prunes down to `keep` snapshots.
 - Each archive starts with `katbackup-index.json`, which lists every path relative to `$HOME` with its mode, mtime, sha256 and symlink target. That lets `show`, `tui` and `restore` see changes without unpacking the archive. Because paths are stored relative to `$HOME`, a snapshot restores fine on another machine or under another username.
-- On restore, a changed file is moved to `<file>.katbak-<timestamp>` before it's overwritten. `--force` skips that, and in the TUI `b` toggles it.
+- On restore, each file's checksum is verified against the index before anything on disk changes. A changed file is then moved to `<file>.katbak-<timestamp>` before it's overwritten. `--force` skips that, and in the TUI `b` toggles it.
+- Files that can't be read, such as ones you lack permission for or that vanish during the backup, are skipped with a warning, and the backup continues. Check the warnings if you need every file.
+- Symlinks are stored as links, and what they point to is not backed up. katbackup warns if an entry in `include` is a symlink. If your dotfiles are symlinked into place, include the folder they really live in.
+- `restore` refuses a snapshot containing paths that would land outside the target folder, so a snapshot from elsewhere can't write to unexpected places.
+- `--keep-dir` keeps an unencrypted copy of everything in the staging folder, secrets included, even for an encrypted backup.
 - Anything listed under `secrets`, or matching the built-in credential patterns (`.ssh`, `.gnupg`, `gh/hosts.yml`, …), is only backed up into encrypted snapshots.
 - Set `KATBACKUP_PASSPHRASE` to skip the passphrase prompt in scripts.
 
 ## TUI keys
 
 `space` select · `a` all · `c` only files that differ from disk · `←/→` fold · `/` filter · `enter` review & restore · `esc` back · `q` quit
+
+## Known limitations
+
+- `keep` counts plain and encrypted snapshots together. If you mostly run plain backups, they can prune away your only encrypted snapshot, and with it your only backup of your secrets. Use `keep = "all"`, a high `keep`, or `encrypt = true` if that matters to you.
+- A file whose only change is its permissions shows as unchanged, so a restore won't put the old permissions back.
+- Secret detection is a fixed list of patterns (see [How it works](#how-it-works)). Add any other credential files to `secrets` yourself, or they'll go into plain snapshots.
+
+## License
+
+[MIT](LICENSE)
