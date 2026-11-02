@@ -89,6 +89,10 @@ func gitDescribe(dir string) string {
 }
 
 func Execute() error {
+	return newRoot().Execute()
+}
+
+func newRoot() *cobra.Command {
 	v := Version()
 	root := &cobra.Command{
 		Use:           "katbackup",
@@ -103,8 +107,9 @@ func Execute() error {
 	root.AddCommand(
 		initCmd(), scanCmd(), backupCmd(), listCmd(), showCmd(),
 		restoreCmd(), pruneCmd(), tuiCmd(),
+		statusCmd(), diffCmd(), logCmd(),
 	)
-	return root.Execute()
+	return root
 }
 
 type env struct {
