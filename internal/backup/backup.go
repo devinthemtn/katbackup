@@ -2,6 +2,7 @@
 package backup
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,7 +19,8 @@ import (
 type Options struct {
 	Home       string
 	Config     config.Config
-	Passphrase string // non-empty encrypts and includes secrets
+	Encrypt    bool   // encrypt and include secrets
+	Passphrase string // required when Encrypt is set, unless DryRun
 	DryRun     bool
 	KeepDir    bool // keep the uncompressed staging copy
 	Now        time.Time
@@ -33,9 +35,12 @@ type Result struct {
 	Pruned   []snapshot.Snapshot
 }
 
-func Run(opts Options) (Result, error) {
+func Run(opts Options) (res Result, err error) {
 	cfg := opts.Config
-	encrypt := opts.Passphrase != ""
+	encrypt := opts.Encrypt || opts.Passphrase != ""
+	if encrypt && opts.Passphrase == "" && !opts.DryRun {
+		return res, errors.New("encrypted backup needs a passphrase")
+	}
 	if opts.Now.IsZero() {
 		opts.Now = time.Now()
 	}
@@ -50,9 +55,15 @@ func Run(opts Options) (Result, error) {
 		excludes = append(excludes, scan.SecretPatterns...)
 	}
 
-	var res Result
 	if !opts.DryRun {
 		res.Staging = filepath.Join(dir, paths.StagingName)
+		// Staging holds plaintext copies, secrets included when encrypting.
+		defer func() {
+			if err != nil && !opts.KeepDir {
+				os.RemoveAll(filepath.Join(dir, paths.StagingName))
+				res.Staging = ""
+			}
+		}()
 		if err := os.RemoveAll(res.Staging); err != nil {
 			return res, err
 		}
@@ -75,11 +86,14 @@ func Run(opts Options) (Result, error) {
 		res.Warnings = append(res.Warnings,
 			fmt.Sprintf("%d secret path(s) skipped; use --encrypt to include them", len(cfg.Secrets)))
 	}
+	if encrypt && opts.KeepDir && !opts.DryRun {
+		res.Warnings = append(res.Warnings,
+			fmt.Sprintf("--keep-dir leaves an unencrypted copy of everything, secrets included, in %s", res.Staging))
+	}
 	if opts.DryRun {
 		return res, nil
 	}
 	if len(res.Entries) == 0 {
-		os.RemoveAll(res.Staging)
 		return res, fmt.Errorf("nothing to back up; check include paths in the config")
 	}
 
@@ -110,8 +124,22 @@ func writeArchive(path, staging string, idx archive.Index, pass string) error {
 		f.Close()
 		return err
 	}
+	// Older snapshots get pruned right after this, so the new one has to
+	// survive a crash before they're gone: data first, then the new name.
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	d, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }

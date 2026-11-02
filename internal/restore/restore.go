@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"time"
 
@@ -56,15 +57,36 @@ func Filter(patterns []string, home string) func(archive.Entry) bool {
 // Plan compares the selected entries with what is currently under targetRoot.
 func Plan(idx archive.Index, keep func(archive.Entry) bool, targetRoot string) []Action {
 	var out []Action
+	// Directories that will be replaced by a new, empty one. Whatever is
+	// beneath them on disk now won't be there after the restore, even if it
+	// currently looks unchanged (through a symlink, for example).
+	replaced := map[string]bool{}
 	for _, e := range idx.Entries {
 		if keep != nil && !keep(e) {
 			continue
 		}
 		target := filepath.Join(targetRoot, filepath.FromSlash(e.Path))
 		kind, typeChanged := compare(e, target)
+		if underAny(replaced, e.Path) {
+			kind, typeChanged = Create, false
+		} else if typeChanged && e.Type == archive.TypeDir {
+			replaced[e.Path] = true
+		}
 		out = append(out, Action{Entry: e, Target: target, Kind: kind, TypeChanged: typeChanged})
 	}
 	return out
+}
+
+func underAny(dirs map[string]bool, rel string) bool {
+	if len(dirs) == 0 {
+		return false
+	}
+	for dir := path.Dir(rel); dir != "."; dir = path.Dir(dir) {
+		if dirs[dir] {
+			return true
+		}
+	}
+	return false
 }
 
 func compare(e archive.Entry, target string) (Kind, bool) {
@@ -96,8 +118,8 @@ func compare(e archive.Entry, target string) (Kind, bool) {
 	return Overwrite, true
 }
 
-func hashFile(path string) string {
-	f, err := os.Open(path)
+func hashFile(file string) string {
+	f, err := os.Open(file)
 	if err != nil {
 		return ""
 	}
@@ -153,14 +175,18 @@ func Apply(archivePath, passphrase string, actions []Action, opts Options) ([]st
 			continue
 		}
 		delete(todo, e.Path)
-		if a.Kind == Overwrite && (a.TypeChanged || !opts.Force) {
+		moveAside := func() error {
+			if a.Kind != Overwrite || (opts.Force && !a.TypeChanged) {
+				return nil
+			}
 			bak := a.Target + suffix
 			if err := os.Rename(a.Target, bak); err != nil {
-				return moved, fmt.Errorf("move aside %s: %w", a.Target, err)
+				return fmt.Errorf("move aside %s: %w", a.Target, err)
 			}
 			moved = append(moved, bak)
+			return nil
 		}
-		if err := write(a, content); err != nil {
+		if err := write(a, content, moveAside); err != nil {
 			return moved, fmt.Errorf("%s: %w", e.Path, err)
 		}
 		if e.Type == archive.TypeDir {
@@ -171,8 +197,13 @@ func Apply(archivePath, passphrase string, actions []Action, opts Options) ([]st
 			opts.Progress(done, total)
 		}
 	}
-	// Directory mtimes change as children are written, so set them last.
-	for _, d := range dirs {
+	// Writing a child changes its directory's mtime and needs write permission,
+	// so modes and mtimes are set last, deepest first.
+	for i := len(dirs) - 1; i >= 0; i-- {
+		d := dirs[i]
+		if err := os.Chmod(d.Target, d.Entry.Mode.Perm()); err != nil {
+			return moved, fmt.Errorf("%s: %w", d.Entry.Path, err)
+		}
 		_ = os.Chtimes(d.Target, d.Entry.ModTime, d.Entry.ModTime)
 	}
 	if len(todo) > 0 {
@@ -181,18 +212,29 @@ func Apply(archivePath, passphrase string, actions []Action, opts Options) ([]st
 	return moved, nil
 }
 
-func write(a Action, content io.Reader) error {
+// write puts one entry on disk. moveAside runs only once the new content is
+// known to be good, so a corrupt archive leaves the existing file untouched.
+func write(a Action, content io.Reader, moveAside func() error) error {
 	e := a.Entry
-	if err := os.MkdirAll(filepath.Dir(a.Target), 0o755); err != nil {
+	// Parents the snapshot has no entry for get no access for other users:
+	// this file may be a secret, and nothing says the folder should be open.
+	if err := os.MkdirAll(filepath.Dir(a.Target), 0o700); err != nil {
 		return err
 	}
 	switch e.Type {
 	case archive.TypeDir:
-		if err := os.MkdirAll(a.Target, e.Mode.Perm()); err != nil {
+		if err := moveAside(); err != nil {
 			return err
 		}
-		return os.Chmod(a.Target, e.Mode.Perm())
+		// Stay writable until Apply sets the recorded mode, after the children.
+		if err := os.MkdirAll(a.Target, 0o700); err != nil {
+			return err
+		}
+		return os.Chmod(a.Target, e.Mode.Perm()|0o700)
 	case archive.TypeSymlink:
+		if err := moveAside(); err != nil {
+			return err
+		}
 		if err := os.Remove(a.Target); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -203,9 +245,14 @@ func write(a Action, content io.Reader) error {
 			return err
 		}
 		defer os.Remove(tmp.Name())
-		if _, err := io.Copy(tmp, content); err != nil {
+		h := sha256.New()
+		if _, err := io.Copy(io.MultiWriter(tmp, h), content); err != nil {
 			tmp.Close()
 			return err
+		}
+		if got := hex.EncodeToString(h.Sum(nil)); got != e.SHA256 {
+			tmp.Close()
+			return fmt.Errorf("checksum mismatch: snapshot is corrupt (want %s, got %s)", e.SHA256, got)
 		}
 		if err := tmp.Chmod(e.Mode.Perm()); err != nil {
 			tmp.Close()
@@ -215,6 +262,9 @@ func write(a Action, content io.Reader) error {
 			return err
 		}
 		if err := os.Chtimes(tmp.Name(), e.ModTime, e.ModTime); err != nil {
+			return err
+		}
+		if err := moveAside(); err != nil {
 			return err
 		}
 		return os.Rename(tmp.Name(), a.Target)

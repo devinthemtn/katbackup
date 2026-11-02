@@ -59,11 +59,11 @@ func (m initModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "up", "k":
 			m.cursor = max(0, m.cursor-1)
 		case "down", "j":
-			m.cursor = min(len(m.cands)-1, m.cursor+1)
+			m.cursor = max(0, min(len(m.cands)-1, m.cursor+1))
 		case "pgup":
 			m.cursor = max(0, m.cursor-m.height)
 		case "pgdown":
-			m.cursor = min(len(m.cands)-1, m.cursor+m.height)
+			m.cursor = max(0, min(len(m.cands)-1, m.cursor+m.height))
 		case " ", "x":
 			if len(m.cands) > 0 {
 				m.selected[m.cursor] = !m.selected[m.cursor]

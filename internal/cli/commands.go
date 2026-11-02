@@ -140,13 +140,14 @@ func backupCmd() *cobra.Command {
 				return err
 			}
 			var pass string
-			if (cfg.Encrypt || encrypt) && !noEncrypt && !dryRun {
+			encrypting := (cfg.Encrypt || encrypt) && !noEncrypt
+			if encrypting && !dryRun {
 				if pass, err = passphrase("New snapshot passphrase: ", true); err != nil {
 					return err
 				}
 			}
 			res, err := backup.Run(backup.Options{
-				Home: e.home, Config: cfg, Passphrase: pass, DryRun: dryRun, KeepDir: keepDir,
+				Home: e.home, Config: cfg, Encrypt: encrypting, Passphrase: pass, DryRun: dryRun, KeepDir: keepDir,
 			})
 			for _, w := range res.Warnings {
 				fmt.Fprintln(os.Stderr, "warning:", w)

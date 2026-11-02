@@ -12,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -66,13 +67,15 @@ func IsEncrypted(path string) bool {
 func Write(dst io.Writer, srcRoot string, idx Index, passphrase string) (err error) {
 	out := dst
 	if passphrase != "" {
-		r, err := age.NewScryptRecipient(passphrase)
-		if err != nil {
-			return err
+		r, rerr := age.NewScryptRecipient(passphrase)
+		if rerr != nil {
+			return rerr
 		}
-		aw, err := age.Encrypt(dst, r)
-		if err != nil {
-			return err
+		// Not `aw, err :=`: that would declare a new err in this block, and
+		// the deferred close would report a failed final chunk to nobody.
+		aw, aerr := age.Encrypt(dst, r)
+		if aerr != nil {
+			return aerr
 		}
 		defer closeInto(aw, &err)
 		out = aw
@@ -198,9 +201,40 @@ func (r *Reader) readIndex() error {
 	if err := json.NewDecoder(r.tr).Decode(&r.Index); err != nil {
 		return fmt.Errorf("decode index: %w", err)
 	}
+	if r.Index.Version > IndexVersion {
+		return fmt.Errorf("snapshot format %d is newer than this katbackup supports (%d); upgrade katbackup",
+			r.Index.Version, IndexVersion)
+	}
+	if err := validatePaths(r.Index.Entries); err != nil {
+		return err
+	}
 	r.entries = make(map[string]Entry, len(r.Index.Entries))
 	for _, e := range r.Index.Entries {
 		r.entries[e.Path] = e
+	}
+	return nil
+}
+
+// validatePaths rejects an index that could write outside the restore target.
+// Snapshots can come from another machine, so their contents aren't trusted.
+// Paths must be clean and relative, and nothing may sit beneath a symlink entry,
+// which a real backup never produces because symlinks aren't followed.
+func validatePaths(entries []Entry) error {
+	symlinks := map[string]bool{}
+	for _, e := range entries {
+		if e.Type == TypeSymlink {
+			symlinks[e.Path] = true
+		}
+	}
+	for _, e := range entries {
+		if !filepath.IsLocal(filepath.FromSlash(e.Path)) || path.Clean(e.Path) != e.Path || e.Path == "." {
+			return fmt.Errorf("unsafe path %q in snapshot", e.Path)
+		}
+		for dir := path.Dir(e.Path); dir != "."; dir = path.Dir(dir) {
+			if symlinks[dir] {
+				return fmt.Errorf("unsafe path %q in snapshot: parent %q is a symlink", e.Path, dir)
+			}
+		}
 	}
 	return nil
 }

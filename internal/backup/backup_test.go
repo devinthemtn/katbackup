@@ -173,6 +173,73 @@ func TestEncryptedIncludesSecrets(t *testing.T) {
 	}
 }
 
+// A dry run of an encrypted backup must list what that backup would contain,
+// secrets included, even though no passphrase has been asked for yet.
+func TestEncryptedDryRunListsSecrets(t *testing.T) {
+	home, cfg := fakeHome(t)
+	res, err := backup.Run(backup.Options{Home: home, Config: cfg, Encrypt: true, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range res.Entries {
+		found = found || e.Path == ".ssh/id_ed25519"
+	}
+	if !found {
+		t.Error("secret missing from the encrypted dry run")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".katConfigBackup")); !os.IsNotExist(err) {
+		t.Error("dry run wrote to disk")
+	}
+}
+
+func TestEncryptWithoutPassphraseFails(t *testing.T) {
+	home, cfg := fakeHome(t)
+	if _, err := backup.Run(backup.Options{Home: home, Config: cfg, Encrypt: true}); err == nil {
+		t.Fatal("an encrypted backup ran with no passphrase")
+	}
+}
+
+// failingBackup runs an encrypted backup whose archive can't be created,
+// because a directory already sits at its temporary path.
+func failingBackup(t *testing.T, keepDir bool) (string, backup.Result, error) {
+	t.Helper()
+	home, cfg := fakeHome(t)
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.Local)
+	dir := filepath.Join(home, ".katConfigBackup")
+	blocker := filepath.Join(dir, now.Format(snapshot.TimeFormat)+snapshot.EncExt+".partial")
+	if err := os.MkdirAll(blocker, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	res, err := backup.Run(backup.Options{Home: home, Config: cfg, Passphrase: "pw", Now: now, KeepDir: keepDir})
+	return filepath.Join(dir, "staging"), res, err
+}
+
+// Staging holds plaintext copies of secrets, so a failure must not leave it behind.
+func TestFailedBackupRemovesStaging(t *testing.T) {
+	staging, _, err := failingBackup(t, false)
+	if err == nil {
+		t.Fatal("expected the backup to fail")
+	}
+	if _, err := os.Stat(staging); !os.IsNotExist(err) {
+		t.Errorf("plaintext staging left behind: %v", err)
+	}
+}
+
+func TestKeepDirWithEncryptionWarns(t *testing.T) {
+	home, cfg := fakeHome(t)
+	res, err := backup.Run(backup.Options{Home: home, Config: cfg, Passphrase: "pw", KeepDir: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(res.Warnings, "\n"), "unencrypted") {
+		t.Errorf("no warning about the unencrypted staging copy: %v", res.Warnings)
+	}
+	if _, err := os.Stat(filepath.Join(res.Staging, ".ssh/id_ed25519")); err != nil {
+		t.Errorf("staging not kept: %v", err)
+	}
+}
+
 func TestPrune(t *testing.T) {
 	home, cfg := fakeHome(t)
 	cfg.Keep = 2

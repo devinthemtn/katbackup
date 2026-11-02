@@ -22,7 +22,7 @@ const passEnv = "KATBACKUP_PASSPHRASE"
 
 // version can be overridden at build time with
 // -ldflags "-X github.com/devinthemtn/katbackup/internal/cli.version=1.2.3".
-var version = "0.1.0"
+var version = "dev"
 
 // Version is the release tag the binary was built from (e.g. via
 // `go install ...@v0.2.0` or a build at a tagged commit), falling back to version.

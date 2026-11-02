@@ -247,9 +247,8 @@ func (m model) updatePassphrase(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *model) refresh() {
 	m.rows = flatten(m.root, m.filter.Value())
-	if m.cursor >= len(m.rows) {
-		m.cursor = max(0, len(m.rows)-1)
-	}
+	// Clamp below as well as above: with no rows, moving down computes -1.
+	m.cursor = max(0, min(m.cursor, len(m.rows)-1))
 }
 
 func (m model) treeHeight() int { return max(3, m.height-6) }
