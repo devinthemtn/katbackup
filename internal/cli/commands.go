@@ -470,7 +470,10 @@ func tuiCmd() *cobra.Command {
 			if err != nil && !errors.Is(err, config.ErrNotFound) {
 				return err
 			}
-			return tui.Run(e.home, e.backupDir, cfg.DiffTool, Version())
+			if errors.Is(err, config.ErrNotFound) {
+				err = errors.New("no config file yet; run `katbackup init` first")
+			}
+			return tui.Run(e.home, e.backupDir, cfg, err, Version())
 		},
 	}
 }

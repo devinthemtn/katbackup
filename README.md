@@ -67,7 +67,7 @@ katbackup restore ~/.zshrc .config/nvim -n     # dry run for selected paths
 katbackup restore '.config/**/*.toml' -y       # globs work; -y skips the confirm prompt
 katbackup restore -s 2026-10-26 --to /tmp/out  # pick a snapshot, restore somewhere else
 katbackup restore --force                      # overwrite without keeping .katbak copies
-katbackup tui                                  # browse snapshots, compare and tick files, restore (? for keys)
+katbackup tui                                  # make, browse, compare, restore and delete snapshots (? for keys)
 katbackup prune [-k 5 | -k all]               # delete old snapshots (default: keep from config)
 katbackup status [--json]                      # what changed since the newest snapshot
 katbackup diff [old] [new] [-p path] [--json]  # what changed between two snapshots (default: the last two)
@@ -207,7 +207,9 @@ The TUI comes back as soon as the command exits, so it has to stay running while
 
 ## TUI keys
 
-`space` select · `a` all · `c` only files that differ from disk · `d` compare the file with the snapshot's copy · `←/→` fold · `/` filter · `enter` review & restore · `esc` back · `?` help · `q` quit
+On the snapshot list: `enter` open · `n` new snapshot · `e` new encrypted snapshot (asks for a passphrase twice) · `x` delete the highlighted snapshot (asks you to press `y` first) · `/` filter · `?` help · `q` quit
+
+In a snapshot: `space` select · `a` all · `c` only files that differ from disk · `d` compare the file with the snapshot's copy · `←/→` fold · `/` filter · `enter` review & restore · `esc` back · `?` help · `q` quit
 
 ## Known limitations
 

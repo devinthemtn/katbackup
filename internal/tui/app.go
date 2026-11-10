@@ -15,6 +15,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/devinthemtn/katbackup/internal/archive"
+	"github.com/devinthemtn/katbackup/internal/backup"
+	"github.com/devinthemtn/katbackup/internal/config"
 	"github.com/devinthemtn/katbackup/internal/restore"
 	"github.com/devinthemtn/katbackup/internal/snapshot"
 )
@@ -46,6 +48,9 @@ const (
 	screenDone
 	screenExtracting
 	screenHelp
+	screenNewPass
+	screenBackingUp
+	screenBackupDone
 )
 
 type snapItem struct{ s snapshot.Snapshot }
@@ -73,15 +78,19 @@ type appliedMsg struct {
 }
 
 type model struct {
-	home   string
-	screen screen
-	width  int
-	height int
-	err    error
+	home      string
+	backupDir string
+	cfg       config.Config
+	cfgErr    error // why backups can't run, such as no config file yet
+	screen    screen
+	width     int
+	height    int
+	err       error
 
-	snaps list.Model
-	snap  snapshot.Snapshot
-	pass  textinput.Model
+	snaps    list.Model
+	snap     snapshot.Snapshot
+	deleting *snapshot.Snapshot // asking whether to delete this one
+	pass     textinput.Model
 
 	idx      archive.Index
 	password string
@@ -100,6 +109,16 @@ type model struct {
 	helpOffset int
 	helpReturn screen // the screen to go back to when help closes
 
+	newPass    [2]textinput.Model // passphrase and confirmation for a new encrypted snapshot
+	newFocus   int
+	backup     *backupRun // the backup in progress, if any
+	bkEncrypt  bool
+	bkPass     string // kept until the result screen closes, for "write anyway"
+	bkStopping bool
+	bkQuit     bool // quit once the running backup has stopped
+	bkRes      backup.Result
+	bkErr      error
+
 	pending    []restore.Action
 	keepBackup bool
 	confOffset int
@@ -112,15 +131,16 @@ type model struct {
 	applyErr error
 }
 
-// Run starts the restore browser. diffTool is the command used to compare files,
-// or empty for the default. version is shown on the help screen.
-func Run(home, backupDir, diffTool, version string) error {
+// Run starts the snapshot browser. cfg is used for making snapshots, which
+// cfgErr (such as config.ErrNotFound) rules out; restoring works either way.
+// version is shown on the help screen.
+func Run(home, backupDir string, cfg config.Config, cfgErr error, version string) error {
 	snaps, err := snapshot.List(backupDir)
 	if err != nil {
 		return err
 	}
-	if len(snaps) == 0 {
-		return fmt.Errorf("no snapshots in %s; run `katbackup backup` first", backupDir)
+	if len(snaps) == 0 && cfgErr != nil {
+		return fmt.Errorf("no snapshots in %s; run `katbackup init`, then `katbackup backup` or `katbackup tui`", backupDir)
 	}
 	items := make([]list.Item, len(snaps))
 	for i, s := range snaps {
@@ -131,6 +151,10 @@ func Run(home, backupDir, diffTool, version string) error {
 	l.Styles.Title = titleStyle
 	// updateSnapshots opens katbackup's help on this key, not the list's own.
 	l.KeyMap.ShowFullHelp = bubblekey.NewBinding(bubblekey.WithKeys("?"), bubblekey.WithHelp("?", "help"))
+	deleteKey := bubblekey.NewBinding(bubblekey.WithKeys("x"), bubblekey.WithHelp("x", "delete"))
+	newKey := bubblekey.NewBinding(bubblekey.WithKeys("n"), bubblekey.WithHelp("n", "new snapshot"))
+	encKey := bubblekey.NewBinding(bubblekey.WithKeys("e"), bubblekey.WithHelp("e", "new encrypted"))
+	l.AdditionalShortHelpKeys = func() []bubblekey.Binding { return []bubblekey.Binding{newKey, encKey, deleteKey} }
 
 	pass := textinput.New()
 	pass.EchoMode = textinput.EchoPassword
@@ -148,11 +172,16 @@ func Run(home, backupDir, diffTool, version string) error {
 	}
 
 	m := model{
-		home: home, snaps: l, pass: pass, filter: filter, keepBackup: true,
+		home: home, backupDir: backupDir, cfg: cfg, cfgErr: cfgErr, snaps: l, pass: pass, filter: filter, keepBackup: true,
 		bar:      progress.New(progress.WithDefaultGradient()),
-		diffTool: diffTool, diffRoot: diffRoot, version: version,
+		diffTool: cfg.DiffTool, diffRoot: diffRoot, version: version,
 	}
-	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
+	final, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
+	// The program can end mid-backup, on a signal for instance. Let the backup
+	// clean up its plaintext staging copy before the process exits.
+	if fm, ok := final.(model); ok && fm.backup != nil {
+		fm.backup.wait()
+	}
 	return err
 }
 
@@ -178,6 +207,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
+			if m.backup != nil {
+				m.stopBackup()
+				m.bkQuit = true
+				return m, nil
+			}
 			return m, tea.Quit
 		}
 	case loadedMsg:
@@ -209,6 +243,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.diffReady(msg)
 	case diffDoneMsg:
 		return m.diffDone(msg)
+	case backupDoneMsg:
+		return m.backupDone(msg)
 	}
 
 	switch m.screen {
@@ -222,6 +258,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateConfirm(msg)
 	case screenHelp:
 		return m.updateHelp(msg)
+	case screenNewPass:
+		return m.updateNewPass(msg)
+	case screenBackingUp:
+		if k, ok := msg.(tea.KeyMsg); ok && (k.String() == "esc" || k.String() == "q") {
+			m.stopBackup()
+		}
+		return m, nil
+	case screenBackupDone:
+		return m.updateBackupDone(msg)
 	case screenDone:
 		if k, ok := msg.(tea.KeyMsg); ok {
 			switch k.String() {
@@ -236,10 +281,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateSnapshots(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if k, ok := msg.(tea.KeyMsg); ok && m.snaps.FilterState() != list.Filtering {
+	k, isKey := msg.(tea.KeyMsg)
+	if isKey && m.deleting != nil {
+		s := *m.deleting
+		m.deleting = nil
+		if k.String() == "y" {
+			m.err = m.deleteSnapshot(s)
+		}
+		return m, nil
+	}
+	if isKey && m.snaps.FilterState() != list.Filtering {
+		m.err = nil
 		switch k.String() {
 		case "q":
 			return m, tea.Quit
+		case "n", "e":
+			return m.startNewSnapshot(k.String() == "e")
+		case "x":
+			if it, ok := m.snaps.SelectedItem().(snapItem); ok {
+				m.deleting = &it.s
+			}
+			return m, nil
 		case "?":
 			m.openHelp()
 			return m, nil
@@ -261,6 +323,23 @@ func (m model) updateSnapshots(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.snaps, cmd = m.snaps.Update(msg)
 	return m, cmd
+}
+
+// deleteSnapshot removes s's archive and drops it from the list.
+func (m *model) deleteSnapshot(s snapshot.Snapshot) error {
+	if err := os.Remove(s.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("delete %s: %w", s.Name, err)
+	}
+	// Rebuild rather than RemoveItem: with a filter applied, the list's index
+	// counts only the visible items, not the ones RemoveItem works on.
+	var keep []list.Item
+	for _, it := range m.snaps.Items() {
+		if si, ok := it.(snapItem); !ok || si.s.Path != s.Path {
+			keep = append(keep, it)
+		}
+	}
+	m.snaps.SetItems(keep)
+	return nil
 }
 
 func (m model) updatePassphrase(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -440,11 +519,23 @@ func waitFor(ch chan tea.Msg) tea.Cmd {
 func (m model) View() string {
 	switch m.screen {
 	case screenSnapshots:
-		v := m.snaps.View()
-		if m.err != nil {
-			v += "\n" + errStyle.Render(m.err.Error())
+		var footer string
+		switch {
+		case m.deleting != nil:
+			footer = errStyle.Render(fmt.Sprintf("Delete snapshot %s? This can't be undone. y delete · any other key cancel", m.deleting.Name))
+		case m.err != nil:
+			footer = errStyle.Render(m.err.Error())
+		case len(m.snaps.Items()) == 0:
+			footer = helpStyle.Render("No snapshots yet. Press n for a new snapshot or e for an encrypted one.")
 		}
-		return v
+		if footer == "" {
+			return m.snaps.View()
+		}
+		// Shrink the list so the footer doesn't push its title off screen.
+		if m.height > 0 {
+			m.snaps.SetHeight(max(1, m.height-lipgloss.Height(footer)-1))
+		}
+		return m.snaps.View() + "\n" + footer
 	case screenPassphrase:
 		v := titleStyle.Render("🔒 "+m.snap.Name) + "\n\n" + m.pass.View() + "\n\n"
 		if m.err != nil {
@@ -455,6 +546,12 @@ func (m model) View() string {
 		return titleStyle.Render("Reading "+m.snap.Name+" and comparing with your files…") + "\n"
 	case screenHelp:
 		return m.viewHelp()
+	case screenNewPass:
+		return m.viewNewPass()
+	case screenBackingUp:
+		return m.viewBackingUp()
+	case screenBackupDone:
+		return m.viewBackupDone()
 	case screenExtracting:
 		return titleStyle.Render("Extracting "+m.diffing+" from "+m.snap.Name+"…") + "\n"
 	case screenTree:
@@ -533,6 +630,9 @@ func (m model) viewTree() string {
 // HelpText describes the file browser. `katbackup tui --help` prints it too.
 const HelpText = `Keys on the snapshot list:
   enter        open the snapshot
+  n            make a new snapshot now
+  e            make a new encrypted snapshot (includes secrets)
+  x            delete the snapshot (asks first)
   /            filter snapshots
   ?            show this help
   q            quit
