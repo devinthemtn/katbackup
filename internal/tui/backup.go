@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/devinthemtn/katbackup/internal/backup"
 	"github.com/devinthemtn/katbackup/internal/snapshot"
@@ -193,18 +194,28 @@ func (m model) viewBackingUp() string {
 	if m.bkEncrypt {
 		what = "encrypted snapshot"
 	}
+	msg := titleStyle.Render("Making a new "+what+"…") + "\n\n" + popupHintStyle.Render("esc stop")
 	if m.bkStopping {
-		return titleStyle.Render("Stopping and cleaning up…") + "\n"
+		msg = titleStyle.Render("Stopping and cleaning up…")
 	}
-	return titleStyle.Render("Making a new "+what+"…") + "\n\n" + helpStyle.Render("esc stop")
+	return m.overSnapshots(msg, lipgloss.Color("212"))
+}
+
+// overSnapshots shows content in a box over the snapshot list.
+func (m model) overSnapshots(content string, border lipgloss.Color) string {
+	behind := m
+	behind.screen = screenSnapshots
+	return popup(behind.View(), popupBox(content, m.width, border), m.width, m.height)
 }
 
 func (m model) viewBackupDone() string {
 	var b strings.Builder
 	r := m.bkRes
 	hint := "enter back to snapshots · q quit"
+	border := lipgloss.Color("212")
 	switch {
 	case m.bkErr != nil:
+		border = lipgloss.Color("196")
 		b.WriteString(errStyle.Render("Backup failed: "+m.bkErr.Error()) + "\n\n")
 	case r.UnchangedSince != nil:
 		b.WriteString(titleStyle.Render("No changes since "+r.UnchangedSince.Name+", so nothing was written") + "\n\n")
@@ -223,10 +234,10 @@ func (m model) viewBackupDone() string {
 		b.WriteString("\n")
 	}
 	for _, n := range r.Notes {
-		b.WriteString(helpStyle.Render("note: "+n) + "\n")
+		b.WriteString(popupHintStyle.Render("note: "+n) + "\n")
 	}
 	for _, w := range r.Warnings {
 		b.WriteString(modStyle.Render("warning: "+w) + "\n")
 	}
-	return b.String() + "\n" + helpStyle.Render(hint)
+	return m.overSnapshots(strings.TrimRight(b.String(), "\n")+"\n\n"+popupHintStyle.Render(hint), border)
 }

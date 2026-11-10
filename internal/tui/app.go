@@ -32,8 +32,6 @@ var (
 	dirStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Bold(true)
 	versionStyle = lipgloss.NewStyle().Bold(true).Padding(0, 1).
 			Foreground(lipgloss.Color("16")).Background(lipgloss.Color("81"))
-	helpBoxStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("212")).Padding(0, 2)
 )
 
 type screen int
@@ -662,13 +660,11 @@ Comparing files (d):
 // The help box's border and side padding, and the rows around its body: the
 // title and footer, each with a blank line.
 const (
-	helpBoxFrameW = 6
+	helpBoxFrameW = popupFrameW
 	helpBoxFrameH = 2
 	helpBoxChrome = 4
-	// helpBoxMinW fits HelpText's longest line without wrapping. helpBoxMaxW
-	// stops the box being mostly empty space on a very wide terminal.
+	// helpBoxMinW fits HelpText's longest line without wrapping.
 	helpBoxMinW = 78
-	helpBoxMaxW = 100
 )
 
 // helpText is the help screen's body before wrapping.
@@ -680,10 +676,10 @@ func (m model) helpText() string {
 	return HelpText + "\n\n" + tool
 }
 
-// helpBoxWidth is the box's outer width: most of the screen up to helpBoxMaxW,
-// and wide enough for the text if the terminal is.
+// helpBoxWidth is the box's outer width: wide enough for the text, or the
+// whole screen if the terminal is narrower.
 func (m model) helpBoxWidth() int {
-	return min(m.width, max(helpBoxMinW, min(helpBoxMaxW, m.width*8/10)))
+	return min(m.width, helpBoxMinW)
 }
 
 // helpLines is the help screen's scrollable body, wrapped to fit the box.
@@ -695,11 +691,19 @@ func (m model) helpLines() []string {
 	return strings.Split(body, "\n")
 }
 
-// helpBoxHeight is the box's outer height: most of the screen, growing to show
-// everything without scrolling when there's room.
+// helpBoxHeight is the box's outer height: tall enough for everything, or the
+// screen less a row above and below if that doesn't fit, with the body
+// scrolling inside. A tiny terminal gives up the margin for the body.
 func (m model) helpBoxHeight() int {
-	need := len(m.helpLines()) + helpBoxChrome + helpBoxFrameH
-	return min(m.height, max(need, m.height*8/10))
+	return min(m.helpRoom(), len(m.helpLines())+helpBoxChrome+helpBoxFrameH)
+}
+
+// helpRoom is the most height the help box may take.
+func (m model) helpRoom() int {
+	if m.height >= 12 {
+		return m.height - 2
+	}
+	return m.height
 }
 
 // helpHeight is the room for the body inside the box.
@@ -766,14 +770,17 @@ func (m model) viewHelp() string {
 		body = append(body[:len(body):len(body)], "")
 	}
 	content := titleStyle.Render("katbackup help") + "  " + versionStyle.Render("version "+m.version) + "\n\n" +
-		strings.Join(body, "\n") + "\n\n" + helpStyle.Render(hint)
+		strings.Join(body, "\n") + "\n\n" + popupHintStyle.Render(hint)
 	if m.width == 0 || m.height == 0 { // no size reported yet
 		return content
 	}
 	// Width and Height exclude the border, so take off only its 2 cells.
-	box := helpBoxStyle.Width(m.helpBoxWidth() - 2).Height(m.helpBoxHeight() - 2).
+	box := popupStyle.Width(m.helpBoxWidth() - 2).Height(m.helpBoxHeight() - 2).
 		MaxWidth(m.width).MaxHeight(m.height).Render(content)
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+	// Show the help over the screen it was opened from.
+	behind := m
+	behind.screen = m.helpReturn
+	return popup(behind.View(), box, m.width, m.height)
 }
 
 func statusTag(k restore.Kind) string {

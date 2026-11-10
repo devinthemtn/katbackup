@@ -328,7 +328,8 @@ func TestHelpScreen(t *testing.T) {
 }
 
 func TestHelpScrolls(t *testing.T) {
-	var m tea.Model = model{screen: screenHelp, helpReturn: screenTree, width: 80, height: 10, version: "1.2.3"}
+	var m tea.Model = model{screen: screenHelp, helpReturn: screenTree, width: 80, height: 10, version: "1.2.3",
+		filter: textinput.New(), root: buildTree(nil, nil)}
 	press := func(k string) string {
 		t.Helper()
 		m, _ = m.Update(key(k))
@@ -403,9 +404,10 @@ func TestHelpScrolls(t *testing.T) {
 	}
 }
 
-func TestHelpBoxIsCenteredAndLarge(t *testing.T) {
+func TestHelpBoxIsCentered(t *testing.T) {
 	for _, tc := range []struct{ w, h int }{{200, 60}, {120, 40}, {80, 24}, {60, 14}, {40, 10}} {
-		m := model{screen: screenHelp, width: tc.w, height: tc.h, version: "1.2.3"}
+		l := list.New([]list.Item{testItem("snap")}, list.NewDefaultDelegate(), tc.w, tc.h)
+		m := model{screen: screenHelp, snaps: l, width: tc.w, height: tc.h, version: "1.2.3"}
 		lines := strings.Split(m.View(), "\n")
 		if len(lines) != tc.h {
 			t.Errorf("%dx%d: %d rows", tc.w, tc.h, len(lines))
@@ -428,19 +430,25 @@ func TestHelpBoxIsCenteredAndLarge(t *testing.T) {
 		if above, below := top, tc.h-1-bottom; above-below > 1 || below-above > 1 {
 			t.Errorf("%dx%d: not centered vertically: %d above, %d below", tc.w, tc.h, above, below)
 		}
-		left := strings.Index(lines[top], "╭")
-		right := tc.w - lipgloss.Width(strings.TrimRight(lines[top], " "))
+		row := lines[top]
+		left := lipgloss.Width(row[:strings.Index(row, "╭")])
+		right := tc.w - lipgloss.Width(row[:strings.Index(row, "╮")+len("╮")])
 		if left-right > 1 || right-left > 1 {
 			t.Errorf("%dx%d: not centered horizontally: %d left, %d right", tc.w, tc.h, left, right)
 		}
-		if boxW := tc.w - left - right; boxW < min(helpBoxMaxW, tc.w*8/10) || boxW > helpBoxMaxW {
+		// Sized to the text, not the terminal, so the screen behind shows around it.
+		if boxW := tc.w - left - right; boxW != min(tc.w, helpBoxMinW) {
 			t.Errorf("%dx%d: box is %d wide", tc.w, tc.h, boxW)
 		}
-		if boxH := bottom - top + 1; boxH < tc.h*8/10 {
-			t.Errorf("%dx%d: box only %d tall", tc.w, tc.h, boxH)
+		need := len(m.helpLines()) + helpBoxChrome + helpBoxFrameH
+		if boxH := bottom - top + 1; boxH != min(m.helpRoom(), need) {
+			t.Errorf("%dx%d: box is %d tall, want %d", tc.w, tc.h, boxH, min(m.helpRoom(), need))
 		}
 		if !strings.Contains(m.View(), "version 1.2.3") || !strings.Contains(m.View(), "esc back") {
 			t.Errorf("%dx%d: title or footer missing:\n%s", tc.w, tc.h, m.View())
+		}
+		if tc.h > need && !strings.Contains(m.View(), "katbackup · choose") && !strings.Contains(m.View(), "List") {
+			t.Errorf("%dx%d: the snapshot list doesn't show behind the box:\n%s", tc.w, tc.h, m.View())
 		}
 	}
 }

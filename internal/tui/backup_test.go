@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -144,5 +145,27 @@ func TestQuitDuringBackupWaitsForCleanup(t *testing.T) {
 	staging := filepath.Join(m.backupDir, paths.StagingName)
 	if _, err := os.Stat(staging); !os.IsNotExist(err) {
 		t.Fatalf("staging left behind: %v", err)
+	}
+}
+
+// The result of a backup, such as "no changes", shows in a box over the
+// snapshot list rather than replacing it.
+func TestBackupResultIsAPopupOverTheList(t *testing.T) {
+	m, cmd := send(backupModel(t), key("n"))
+	m = finish(t, m, cmd)
+	m, _ = send(m, key("enter"))
+	m, cmd = send(m, key("n"))
+	m = finish(t, m, cmd)
+	v := m.View()
+	name := m.snaps.Items()[0].(snapItem).s.Name
+	if !strings.Contains(v, "No changes since") || !strings.Contains(v, "╭") {
+		t.Fatalf("no result box:\n%s", v)
+	}
+	// The snapshot's name appears in the list behind as well as in the box.
+	if strings.Count(v, name) < 2 {
+		t.Errorf("the list isn't showing behind the box:\n%s", v)
+	}
+	if rows := strings.Split(v, "\n"); len(rows) != m.height {
+		t.Errorf("%d rows, want %d", len(rows), m.height)
 	}
 }
